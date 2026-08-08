@@ -39,6 +39,8 @@ const workspaceSource = readFileSync(
 assert.match(sandboxSource, /\(deny network\*\)/u);
 assert.match(sandboxSource, /--unshare-all/u);
 assert.match(sandboxSource, /throw new Error\(\s*`\$\{status\.reason\}/u);
+// The unsandboxed fallback for Android/Termux is strictly opt-in behind this flag.
+assert.match(sandboxSource, /MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL/u);
 assert.match(workspaceSource, /spawnWorkspaceSandboxedShell/u);
 assert.match(workspaceSource, /Use the dependency tool/u);
 assert.doesNotMatch(workspaceSource, /spawn\(shell,\s*shellArgs/u);
@@ -169,10 +171,38 @@ try {
   rmSync(reviewWorkspace, { recursive: true, force: true });
 }
 
+// The unsandboxed escape hatch must be opt-in and must never downgrade an
+// available OS sandbox. Toggle the flag around a status read to prove both.
+{
+  const priorFlag = process.env.MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL;
+  try {
+    delete process.env.MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL;
+    const gated = getWorkspaceShellSandboxStatus();
+    process.env.MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL = "true";
+    const opted = getWorkspaceShellSandboxStatus();
+    if (gated.available) {
+      // A native sandbox exists on this host: the flag must not change anything.
+      assert.notEqual(gated.backend, "unsandboxed");
+      assert.deepEqual(opted, gated, "opt-in flag must not downgrade an available OS sandbox");
+    } else {
+      // No native sandbox (e.g. Android/Termux): closed by default, opt-in enables it.
+      assert.equal(gated.available, false);
+      assert.deepEqual(opted, { available: true, backend: "unsandboxed" });
+    }
+  } finally {
+    if (priorFlag === undefined) delete process.env.MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL;
+    else process.env.MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL = priorFlag;
+  }
+}
+
 const status = getWorkspaceShellSandboxStatus();
 if (!status.available) {
   assert.ok(status.reason.length > 0);
   console.log(`Professor Mari shell sandbox regression skipped runtime proof: ${status.reason}`);
+} else if (status.backend === "unsandboxed") {
+  // The unsandboxed backend deliberately provides no OS isolation, so the
+  // network-deny / write-confinement proof below does not apply to it.
+  console.log("Professor Mari shell sandbox regression skipped runtime proof: unsandboxed backend has no OS isolation.");
 } else {
   const workspace = mkdtempSync(join(tmpdir(), "marinara-mari-sandbox-workspace-"));
   const outside = mkdtempSync(join(tmpdir(), "marinara-mari-sandbox-outside-"));

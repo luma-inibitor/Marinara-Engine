@@ -4,6 +4,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Added
+
+- Added `MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL`, an opt-in flag that lets Professor Mari's `bash` tool run on platforms with no OS sandbox (notably Android/Termux, which has neither macOS Seatbelt nor Linux bubblewrap). It is off by default and only takes effect when no sandbox backend exists — an available Seatbelt or bubblewrap sandbox is never downgraded. When enabled, shell commands run without network-deny or workspace-write confinement, though environment secrets are still stripped, so it is intended for single-user, on-device installs. Documented in `docs/CONFIGURATION.md` under _Professor Mari shell commands_.
+
 ## [2.4.1]
 
 ### Added

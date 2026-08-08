@@ -385,7 +385,7 @@ export interface MariWorkspaceStatus {
   tools: MariWorkspaceToolName[];
   shellSandbox: {
     available: boolean;
-    backend: "macos-seatbelt" | "linux-bubblewrap" | null;
+    backend: "macos-seatbelt" | "linux-bubblewrap" | "unsandboxed" | null;
     reason?: string;
   };
   dbAccess: "server-managed";

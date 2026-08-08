@@ -2661,7 +2661,9 @@ ${sections.join("\n\n")}
           const output = compactOutput(
             [
               `Command: ${command}`,
-              `Sandbox: ${sandboxed.backend} (network denied; writes confined to workspace)`,
+              sandboxed.backend === "unsandboxed"
+                ? `Sandbox: ${sandboxed.backend} (no OS sandbox: network and workspace writes are NOT confined; env secrets stripped)`
+                : `Sandbox: ${sandboxed.backend} (network denied; writes confined to workspace)`,
               `Exit code: ${exitCode}${timedOut ? ` (timeout after ${timeoutSeconds}s)` : ""}`,
               stdout ? `\nstdout:\n${stdout.trimEnd()}` : "",
               stderr ? `\nstderr:\n${stderr.trimEnd()}` : "",

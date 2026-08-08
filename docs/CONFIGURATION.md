@@ -238,6 +238,7 @@ Related privileged settings:
 | `CUSTOM_TOOL_SCRIPT_ENABLED`                | `false`               | Enables custom script tools. Keep off for untrusted or imported tools.                                                                                                                |
 | `ENABLE_CUSTOM_AGENT_REPOS`                 | `false`               | Enables manual GitHub agent-repository preview and sync in Agents Manager. Third-party agents are unvetted and require explicit confirmation before import or update.                 |
 | `ENABLE_EXTERNAL_EXTENSIONS`                | `false`               | First of two gates for third-party extension imports. The user must also opt in under Settings → Advanced → Danger Zone.                                                              |
+| `MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL`     | `false`               | Lets Professor Mari run raw shell without an OS sandbox on platforms that have none (Android/Termux). Never downgrades an available sandbox. See _Professor Mari shell commands_ below. |
 | `IMPORT_ALLOWED_ROOTS`                      | empty                 | Filesystem folders that bulk import may read without a picker token.                                                                                                                  |
 | `PROFILE_EXPORT_JSON_LIMIT_BYTES`           | `268435456` (256 MiB) | Largest single JSON profile export the server will build.                                                                                                                             |
 
@@ -258,6 +259,18 @@ Turn on only the switch you need for a self-hosted service on another private-ne
 | `WEBHOOK_LOCAL_URLS_ENABLED`  | `false` | Allows custom tool webhooks to reach private or LAN addresses.                       |
 
 To connect a local or self-hosted model, see [Connecting a Local or Self-Hosted Model](connections/local-self-hosted.md).
+
+## Professor Mari shell commands
+
+Professor Mari's `bash` tool runs inside an OS-level sandbox that denies network access, confines writes to the workspace, and strips secrets from the child environment. The sandbox uses macOS Seatbelt on macOS and bubblewrap on Linux. Where neither exists — most notably Android/Termux — the `bash` tool fails closed and Mari falls back to her structured `read`, `grep`, `find`, `ls`, `edit`, `write`, and `app_data` tools.
+
+If you run Marinara on a device you control and want on-device shell there, set:
+
+```
+MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL=true
+```
+
+This only takes effect when no OS sandbox is available; it never downgrades an available Seatbelt or bubblewrap sandbox, so setting it on macOS or a bubblewrap-capable Linux host changes nothing. When it does apply, Mari runs commands directly with **no network-deny and no workspace-write confinement** — secrets are still stripped from the command's environment, but a command can read and write anywhere your server process can. Treat it as a single-user, on-device convenience and leave it off on any shared or remote-facing install.
 
 ## Full environment variable reference
 

@@ -471,6 +471,21 @@ export function isProviderLocalUrlsEnabled() {
   return isEnabledFlag(process.env.PROVIDER_LOCAL_URLS_ENABLED);
 }
 
+/**
+ * Opt-in escape hatch that lets Professor Mari run raw shell commands without an
+ * OS-level sandbox. Off by default and intended for single-user, on-device
+ * installs — notably Android/Termux, where neither macOS Seatbelt nor Linux
+ * bubblewrap is available, so the `bash` tool otherwise fails closed.
+ *
+ * It only takes effect when no sandbox backend exists: an available Seatbelt or
+ * bubblewrap sandbox is never downgraded. Enabling it drops the network-deny and
+ * workspace-write confinement the sandbox provides; secrets are still stripped
+ * from the child environment via `sanitizeWorkspaceShellEnv`.
+ */
+export function isMariUnsandboxedShellAllowed() {
+  return isEnabledFlag(process.env.MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL);
+}
+
 export function getEmbeddingRequestTimeoutMs() {
   return parsePositiveIntEnv(process.env.EMBEDDING_TIMEOUT_MS, 300_000, MAX_TIMEOUT_MS);
 }

@@ -5,8 +5,9 @@ import { delimiter, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { workspacePathAccessPolicy } from "./workspace-change-review.service.js";
 import { getBubblewrapRuntimeStatus } from "../sandbox/bubblewrap-runtime.js";
+import { isMariUnsandboxedShellAllowed } from "../../config/runtime-config.js";
 
-export type WorkspaceShellSandboxBackend = "macos-seatbelt" | "linux-bubblewrap";
+export type WorkspaceShellSandboxBackend = "macos-seatbelt" | "linux-bubblewrap" | "unsandboxed";
 
 export type WorkspaceShellSandboxStatus =
   | { available: true; backend: WorkspaceShellSandboxBackend }
@@ -25,6 +26,18 @@ type SpawnWorkspaceShellInput = {
 };
 
 const MACOS_SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+// Shell candidates for the opt-in unsandboxed backend, tried in order. Termux
+// reports its platform as either "android" or "linux" depending on the Node
+// build, and ships its userland under /data/data/com.termux, so the standard
+// /bin paths do not exist there.
+const UNSANDBOXED_SHELL_CANDIDATES = [
+  "/data/data/com.termux/files/usr/bin/bash",
+  "/data/data/com.termux/files/usr/bin/sh",
+  "/bin/bash",
+  "/bin/sh",
+];
+const UNSANDBOXED_OPT_IN_HINT =
+  " Set MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL=true to run shell commands without an OS sandbox on this device; this drops network and workspace-write isolation, so only do it on a device you control.";
 const SAFE_ENVIRONMENT_KEYS = new Set([
   "PATH",
   "LANG",
@@ -60,6 +73,18 @@ function findBubblewrap() {
   return status.available ? status.executable : undefined;
 }
 
+function findUnsandboxedShell() {
+  const preferred = process.env.SHELL;
+  if (preferred && existsSync(preferred)) return preferred;
+  return UNSANDBOXED_SHELL_CANDIDATES.find((path) => existsSync(path));
+}
+
+function unsandboxedShellArgs(shell: string, command: string) {
+  // bash honours --noprofile/--norc so the workspace shell does not source the
+  // user's login files; plain sh has no equivalent flags.
+  return shell.endsWith("bash") ? ["--noprofile", "--norc", "-c", command] : ["-c", command];
+}
+
 export function getWorkspaceShellSandboxStatus(): WorkspaceShellSandboxStatus {
   if (process.platform === "darwin" && existsSync(MACOS_SANDBOX_EXEC)) {
     return { available: true, backend: "macos-seatbelt" };
@@ -67,12 +92,20 @@ export function getWorkspaceShellSandboxStatus(): WorkspaceShellSandboxStatus {
   if (process.platform === "linux") {
     const status = getBubblewrapRuntimeStatus();
     if (status.available) return { available: true, backend: "linux-bubblewrap" };
-    return { available: false, backend: null, reason: `Professor Mari shell commands are disabled. ${status.reason}` };
+    if (isMariUnsandboxedShellAllowed()) return { available: true, backend: "unsandboxed" };
+    return {
+      available: false,
+      backend: null,
+      reason: `Professor Mari shell commands are disabled. ${status.reason}${UNSANDBOXED_OPT_IN_HINT}`,
+    };
   }
+  // No OS sandbox exists on this platform (e.g. Android/Termux). The unsandboxed
+  // backend is the only way to run shell here, and it is strictly opt-in.
+  if (isMariUnsandboxedShellAllowed()) return { available: true, backend: "unsandboxed" };
   return {
     available: false,
     backend: null,
-    reason: `Professor Mari shell commands are disabled because no supported OS sandbox is available on ${process.platform}.`,
+    reason: `Professor Mari shell commands are disabled because no supported OS sandbox is available on ${process.platform}.${UNSANDBOXED_OPT_IN_HINT}`,
   };
 }
 
@@ -278,7 +311,18 @@ export async function spawnWorkspaceSandboxedShell(
   };
   let child: ChildProcess;
   try {
-    if (status.backend === "macos-seatbelt") {
+    if (status.backend === "unsandboxed") {
+      const shell = findUnsandboxedShell();
+      if (!shell) {
+        throw new Error("No POSIX shell (bash or sh) was found to run the workspace command.");
+      }
+      child = spawn(shell, unsandboxedShellArgs(shell, input.command), {
+        cwd: workspaceRoot,
+        env,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } else if (status.backend === "macos-seatbelt") {
       child = spawn(
         MACOS_SANDBOX_EXEC,
         [
