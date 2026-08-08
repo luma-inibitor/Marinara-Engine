@@ -150,7 +150,10 @@ function unsafeFallbackEnabled() {
 
 async function spawnTransformProcess(workspaceRoot: string, args: string[]): Promise<WorkspaceSandboxedShell> {
   const status = getWorkspaceShellSandboxStatus();
-  if (status.available) {
+  // The opt-in `unsandboxed` backend only widens Professor Mari's shell tool on
+  // devices with no OS sandbox. Transforms are untrusted scripts, so they keep
+  // requiring a real sandbox and fall through to this file's own opt-in gate.
+  if (status.available && status.backend !== "unsandboxed") {
     return spawnWorkspaceSandboxedProcess({
       executable: process.execPath,
       args,
@@ -161,8 +164,9 @@ async function spawnTransformProcess(workspaceRoot: string, args: string[]): Pro
     });
   }
   if (!unsafeFallbackEnabled()) {
+    const reason = status.available ? `No OS sandbox is available on ${process.platform}.` : status.reason;
     throw new Error(
-      `${status.reason} mari db transform requires Seatbelt/bubblewrap for untrusted scripts. ` +
+      `${reason} mari db transform requires Seatbelt/bubblewrap for untrusted scripts. ` +
         `To run a personally reviewed local transform anyway, set ${UNSAFE_TRANSFORM_FALLBACK_ENV}=true and restart Marinara.`,
     );
   }
