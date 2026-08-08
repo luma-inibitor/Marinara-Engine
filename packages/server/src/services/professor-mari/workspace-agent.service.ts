@@ -457,6 +457,11 @@ function windowsShellCompatibilityIssue(command: string): string | null {
   ].join(" ");
 }
 
+// Placeholder for the shell-sandbox guidance bullet. The real sentence depends
+// on the live sandbox status (available / unavailable / unsandboxed) and is
+// substituted per request by mariShellSandboxPromptLine().
+const MARI_SHELL_SANDBOX_PROMPT_TOKEN = "%%MARI_SHELL_SANDBOX_LINE%%";
+
 const MARI_SYSTEM_PROMPT = `You are Professor Mari, Marinara Engine's Home-screen local workspace helper.
 
 Voice:
@@ -475,7 +480,7 @@ Workspace defaults:
 - Use Mari CLI commands for images, wiki reads, code/workspace tasks, agents, tools, raw DB work, or anything \`app_data\` does not cover. Only write raw files when no CLI/helper path fits.
 - You may create and update Personal Extension drafts with \`personal_extension.create\` and \`personal_extension.update\`. These actions always disable changed code and clear its approval. Browser Extensions receive active chat and Character IDs through \`marinara.context\`; request \`read_active_characters\` or \`read_active_persona\` only when the extension truly needs bounded active-record fields. Never claim to approve, enable, or run an extension: only the user can review the exact code hash and requested permissions, then choose **Review and Run** in **Settings → Addons → Personal Extensions**.
 - For user-facing Browser Extension UI, use \`marinara.ui.registerContribution(...)\`. It can add a trusted Marinara-rendered top-bar button, Extensions menu item, right-side panel, or button in the Chats, Bots, Characters, Personas, Lorebooks, Presets, Connections, Agents, and Settings surfaces. For a side-panel \`button\`, set \`surface\` to the requested surface and choose \`position: "header"\`, \`"before-content"\`, or \`"after-content"\`; omit both fields for the top bar. The \`icon\` may be any kebab-case Lucide icon name supported by Marinara. Panels may contain headings, text, preformatted output, buttons, text inputs, selects, toggles, sliders, color controls, and spacers. Use \`onActivate\` and \`onEvent\` for behavior and update the returned handle when the view changes. Never write extension code that expects \`document\`, \`window\`, \`innerHTML\`, host CSS selectors, React internals, unrestricted \`fetch\`, or direct Marinara API access; those capabilities are deliberately absent.
-- Raw \`bash\` commands run in an OS sandbox with network access denied, inherited secrets removed, and filesystem writes confined to the workspace. If the sandbox is unavailable, raw shell fails closed; use structured workspace tools.
+${MARI_SHELL_SANDBOX_PROMPT_TOKEN}
 - Use the \`dependency\` tool when a source change needs a public npm package. Raw package-manager installs are blocked. The tool resolves an exact version and integrity, then waits for the user to approve installation with lifecycle scripts disabled.
 - Ordinary source files can still be edited directly. Dependency manifests, lockfiles, launchers, installers, and CI workflows are staged for a separate user review instead of being changed silently. Never bypass that review through \`bash\`.
 - Inspect before claiming facts. Verify after changing anything.
@@ -515,6 +520,20 @@ Raw DB row contracts:
 Workspace files:
 For user-facing questions about Marinara features, configuration, installation, or troubleshooting, use \`docs_search\` and then \`docs_read\` before broad workspace searches. Cite the documentation path and heading in the answer. Use built-in or CLI help when exact command syntax matters. Inspect source only when canonical documentation is missing or ambiguous, or when the user explicitly asks about internals; if source inspection was required, say that the answer used an implementation-level source.
 Use other workspace files to understand Marinara internals, answer source-code questions, or find content that is not available through documentation, CLI, or app-data commands. Do not inspect source files instead of live app data when the user asks about saved characters, chats, agents, tools, presets, lorebooks, or other app content.`;
+
+// Resolve the shell-sandbox guidance bullet from the live status so Mari is told
+// what the `bash` tool actually does on this device: sandboxed, fully disabled,
+// or (opt-in) running without OS isolation on Android/Termux.
+function mariShellSandboxPromptLine() {
+  const status = getWorkspaceShellSandboxStatus();
+  if (!status.available) {
+    return "- Raw `bash` commands are unavailable on this device because no OS sandbox is present, so shell fails closed. Use the structured workspace tools (read/grep/find/ls/edit/write/app_data) and Mari CLI commands instead.";
+  }
+  if (status.backend === "unsandboxed") {
+    return "- Raw `bash` commands run WITHOUT an OS sandbox on this device (the operator set MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL): network is reachable and filesystem writes are NOT confined to the workspace, though inherited secrets are still removed. Prefer the structured workspace tools for routine work and keep any shell command scoped to the workspace.";
+  }
+  return "- Raw `bash` commands run in an OS sandbox with network access denied, inherited secrets removed, and filesystem writes confined to the workspace. If the sandbox is unavailable, raw shell fails closed; use structured workspace tools.";
+}
 
 function workspaceCommandProtocolPrompt() {
   const toolDocs = WORKSPACE_TOOL_DEFINITIONS.map(
@@ -2096,7 +2115,11 @@ export class ProfessorMariWorkspaceService {
       `</workspace_context>`,
     ].join("\n");
     const messages: ChatMessage[] = [
-      { role: "system", content: MARI_SYSTEM_PROMPT, contextKind: "prompt" },
+      {
+        role: "system",
+        content: MARI_SYSTEM_PROMPT.replace(MARI_SHELL_SANDBOX_PROMPT_TOKEN, mariShellSandboxPromptLine()),
+        contextKind: "prompt",
+      },
       { role: "system", content: workspaceCommandProtocolPrompt(), contextKind: "prompt" },
       { role: "system", content: workspaceInfo, contextKind: "prompt" },
     ];
