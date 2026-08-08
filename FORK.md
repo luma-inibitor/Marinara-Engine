@@ -91,4 +91,13 @@ pnpm regression:professor-mari-shell-sandbox  # for the shell patch specifically
 
 ## Running on Android / Termux
 
-The stock `start-termux.sh` auto-updates only `main`/`staging` and lives *inside* the repo (so it changes when you switch branches). To switch cleanly between the fork and mainline on-device, use an **external** switcher script that lives in `$HOME` (outside the repo), checks out the target branch, and then delegates to `./start-termux.sh --skip-update`. See `PATCHES.md` / the switcher script for the current setup.
+The stock `start-termux.sh` auto-updates only `main`/`staging` and lives *inside* the repo (so it changes when you switch branches). The switcher in [`tools/termux/`](./tools/termux/) works around this: it runs two clones (`~/Marinara-fork` on `luma/main` and `~/Marinara-main` on stock `main`) that share one data directory (`~/marinara-data`), so you flip between fork and mainline instantly with identical chats, launched from Termux:Widget home-screen icons.
+
+Install on-device:
+
+```sh
+git clone --branch luma/main https://github.com/luma-inibitor/Marinara-Engine "$HOME/Marinara-fork"
+bash "$HOME/Marinara-fork/tools/termux/install.sh"
+```
+
+See [`tools/termux/README.md`](./tools/termux/README.md) for full details, including how it migrates your existing APK-clone chats into the shared data directory. Key facts it relies on: the file-native store lives at `<DATA_DIR>/storage/tables/*.json` (default `packages/server/data`), and the APK is only a WebView viewer on port 7860 — its "Install / Start" button force-checks-out the stock release tag, so start the server with the switcher instead.
