@@ -29,12 +29,12 @@ import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { getBuildCommit, getBuildLabel } from "./config/build-info.js";
 import {
-  getLogLevel,
   getNodeEnv,
   isRequestLoggingDisabled,
   isAutoCreateDefaultConnectionDisabled,
   getFileStorageDir,
 } from "./config/runtime-config.js";
+import { buildLoggerOptions } from "./lib/logger.js";
 import { corsDelegate } from "./config/cors-config.js";
 import { sidecarProcessService } from "./services/sidecar/sidecar-process.service.js";
 import { startServerAutonomousScheduler } from "./services/conversation/server-autonomous-scheduler.service.js";
@@ -57,10 +57,7 @@ const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
 export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   const hadUserStateBeforeStartup = existsSync(join(getFileStorageDir(), "manifest.json"));
   const app = Fastify({
-    logger: {
-      level: getLogLevel(),
-      transport: getNodeEnv() !== "production" ? { target: "pino-pretty", options: { colorize: true } } : undefined,
-    },
+    logger: buildLoggerOptions(),
     logController: new LogController({ disableRequestLogging: isRequestLoggingDisabled() }),
     bodyLimit: MAX_UPLOAD_BYTES, // Large profile imports can include many base64 avatars.
     ...(https && { https }),

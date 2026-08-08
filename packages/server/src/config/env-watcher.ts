@@ -11,8 +11,8 @@
 // operator knows a restart is required for them.
 
 import { existsSync, statSync, watchFile, unwatchFile } from "node:fs";
-import { logger } from "../lib/logger.js";
-import { getEnvFilePath, getLogLevel, reloadRuntimeEnv, type EnvReloadResult } from "./runtime-config.js";
+import { getRootLogLevel, logger } from "../lib/logger.js";
+import { getEnvFilePath, reloadRuntimeEnv, type EnvReloadResult } from "./runtime-config.js";
 import { personalServerExtensionRuntime } from "../services/extensions/personal-server-extension-runtime.js";
 
 // Keys whose values are bound at process / app startup and won't take effect
@@ -50,6 +50,11 @@ const RESTART_REQUIRED_KEYS = new Set<string>([
   // Fastify reads the LogController configuration once at boot (app.ts), so
   // toggling this after startup has no effect until a restart.
   "LOG_DISABLE_REQUEST_LOGGING",
+  // The file-logging transport (targets, path, per-target file level) is built
+  // once at boot in buildLoggerOptions(); pino transport targets are fixed at
+  // construction, so changing these needs a restart to rebuild the transport.
+  "LOG_FILE",
+  "LOG_FILE_LEVEL",
 ]);
 
 // Keys whose values must be masked when logged.
@@ -75,7 +80,10 @@ function applyLogLevel(diff: EnvReloadResult) {
   ) {
     return;
   }
-  const next = getLogLevel();
+  // Use the root floor rather than LOG_LEVEL directly: when file logging is on,
+  // the root gate must stay at the most verbose level or the file target would
+  // stop receiving records below the new console level.
+  const next = getRootLogLevel();
   try {
     logger.level = next;
   } catch (err) {

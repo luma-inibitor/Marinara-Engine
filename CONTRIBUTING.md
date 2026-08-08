@@ -120,6 +120,8 @@ These checks are intentionally small and do not replace manual verification. Whe
 
 All server-side logging goes through a shared [Pino](https://getpino.io/) logger instance exported from `packages/server/src/lib/logger.ts`. The `LOG_LEVEL` environment variable controls the minimum severity that gets printed (default: `warn`). See `docs/CONFIGURATION.md` for user-facing level descriptions.
 
+The shared singleton and Fastify's own logger (built in `app.ts`) both derive their configuration from `buildLoggerOptions()` in `logger.ts`, so their transports and levels can't drift. When `LOG_FILE` is set, `buildLoggerOptions()` emits a multi-target transport: the console keeps `LOG_LEVEL` while a rotating file target (`pino-roll`) captures at `LOG_FILE_LEVEL` (default `debug`). Because Pino's root `level` gates every target before per-target levels apply, the root is pinned to the most verbose of the two — the env-watcher reads `getRootLogLevel()` so a live `LOG_LEVEL` change never raises the gate above the file target. Transport targets are fixed at construction, so `LOG_FILE`/`LOG_FILE_LEVEL` are restart-required (see `env-watcher.ts`).
+
 ### Level guidelines
 
 | Level            | When to use                                         | Examples                                                                                         |

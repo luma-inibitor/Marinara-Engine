@@ -194,6 +194,24 @@ LOG_DISABLE_REQUEST_LOGGING=true
 
 Browser logging is separate and is not controlled by `LOG_LEVEL`.
 
+### Detailed log file with rotation
+
+By default the server only logs to the console. If you also want a more detailed log kept on disk — handy for troubleshooting after the fact — set `LOG_FILE`. The console keeps following `LOG_LEVEL` exactly as before; the file is written independently.
+
+```
+LOG_FILE=true
+```
+
+- Set `LOG_FILE=true` (or `1`/`yes`/`on`) to write to the default location `DATA_DIR/logs/marinara.log`, or give an explicit path such as `LOG_FILE=./data/logs/marinara.log`.
+- The file rotates automatically: each file is capped at about 10MB and the last 5 are kept, so disk use stays bounded to roughly 50MB. Rotated files are named like `marinara.<date>.<n>.log`.
+- The on-disk verbosity is controlled separately by `LOG_FILE_LEVEL`, which defaults to `debug` so the file captures more detail than the console:
+
+```
+LOG_FILE_LEVEL=debug
+```
+
+`LOG_FILE` and `LOG_FILE_LEVEL` are read once at startup, so changing either requires a restart. `LOG_LEVEL` itself still takes effect without a restart when file logging is off.
+
 ## Timeouts
 
 A timeout is the longest time the server waits for a slow job before giving up. Media jobs like image and video generation can be slow, so their timeouts are generous by default. All timeout values are in milliseconds unless the name says otherwise.

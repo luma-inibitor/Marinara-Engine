@@ -23,6 +23,9 @@ const MAX_CHAT_GENERATION_TIMEOUT_MS = 3_600_000;
 export const DEFAULT_AGENT_CALL_TIMEOUT_MS = 300_000;
 export const DEFAULT_GAME_DYNAMIC_IMAGE_PROMPT_TIMEOUT_MS = 45_000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
+const VALID_LOG_LEVELS = new Set(["trace", "debug", "info", "warn", "error", "fatal"]);
+const DEFAULT_LOG_FILE_LEVEL = "debug";
+let lastInvalidLogFileLevel: string | null = null;
 
 function createValidatedTimeoutGetter(envVar: string, defaultMs: number, minMs: number, maxMs: number) {
   let lastInvalid: string | null = null;
@@ -327,6 +330,51 @@ export function isRequestLoggingDisabled() {
   const raw = normalizeEnvValue(process.env.LOG_DISABLE_REQUEST_LOGGING);
   if (raw !== null) return isEnabledFlag(raw);
   return false;
+}
+
+/**
+ * Optional detailed on-disk log. Returns the resolved log file path when file
+ * logging is enabled, or `null` (console-only, the default) when `LOG_FILE` is
+ * unset or explicitly disabled.
+ *
+ * `LOG_FILE` accepts either an enable flag (`true`/`1`/`yes`/`on`) — which uses
+ * the default location `DATA_DIR/logs/marinara.log` — or an explicit file path.
+ */
+export function getLogFilePath(): string | null {
+  const raw = normalizeEnvValue(process.env.LOG_FILE);
+  if (raw === null || isDisabledFlag(raw)) return null;
+  if (isEnabledFlag(raw)) return resolve(getDataDir(), "logs", "marinara.log");
+  return resolveFromServerRoot(raw);
+}
+
+/**
+ * Verbosity of the on-disk log, independent of the console `LOG_LEVEL`. Defaults
+ * to `debug` so the file captures more detail than the console. Only meaningful
+ * when {@link getLogFilePath} is non-null.
+ */
+export function getLogFileLevel(): string {
+  const raw = normalizeEnvValue(process.env.LOG_FILE_LEVEL)?.toLowerCase();
+  if (!raw) return DEFAULT_LOG_FILE_LEVEL;
+  if (!VALID_LOG_LEVELS.has(raw)) {
+    if (lastInvalidLogFileLevel !== raw) {
+      lastInvalidLogFileLevel = raw;
+      try {
+        // The shared logger may still be under construction on first boot
+        // (this getter feeds buildLoggerOptions()), so guard the warn.
+        sharedLogger.warn(
+          "[runtime-config] Ignoring invalid LOG_FILE_LEVEL=%s; expected one of %s, using %s",
+          raw,
+          [...VALID_LOG_LEVELS].join("|"),
+          DEFAULT_LOG_FILE_LEVEL,
+        );
+      } catch {
+        /* logger singleton not initialized yet */
+      }
+    }
+    return DEFAULT_LOG_FILE_LEVEL;
+  }
+  lastInvalidLogFileLevel = null;
+  return raw;
 }
 
 export function getServerProtocol() {

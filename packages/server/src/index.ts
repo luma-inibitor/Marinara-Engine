@@ -73,9 +73,13 @@ async function main() {
       envWatcher.stop();
       await app.close();
       logger.info("Shutdown complete");
+      // Drain the pino transport worker (file logging) before exiting so the
+      // tail of the log isn't lost. No-op when no transport is configured.
+      logger.flush();
       process.exit(0);
     } catch (err) {
       logger.error(err, "Shutdown failed");
+      logger.flush();
       process.exit(1);
     }
   };
