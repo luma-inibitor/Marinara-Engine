@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, rm, symlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
@@ -123,6 +123,12 @@ class CapabilityModuleRuntime {
     const serverNodeModules = resolve(dirname(fileURLToPath(import.meta.url)), "../../../node_modules");
     if (!existsSync(serverNodeModules)) return;
     await mkdir(packageRoot, { recursive: true });
+    // existsSync() follows symlinks, so a link left behind by a checkout that has
+    // since moved or been removed (e.g. a DATA_DIR shared between clones) reads as
+    // absent above yet still occupies this path — symlink() would then throw
+    // EEXIST and dependency resolution would stay broken. Clear the stale entry
+    // first so it self-heals.
+    await rm(link, { force: true }).catch(() => {});
     try {
       await symlink(serverNodeModules, link, process.platform === "win32" ? "junction" : "dir");
     } catch (error) {
