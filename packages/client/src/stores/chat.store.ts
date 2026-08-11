@@ -263,7 +263,20 @@ interface ChatState {
   /** Manually dismissed notification chatIds (won't re-appear until next message). */
   dismissedNotifications: Set<string>;
   /** Pending /goto request — ChatArea fulfils by paginating + scrolling to the target message. Token forces re-fire on identical N. */
-  gotoRequest: { chatId: string; messageNumber: number; token: number } | null;
+  /**
+   * Pending jump. `messageId` is authoritative when present: resolving a
+   * message *number* depends on `totalMessageCount - messages.length`, which
+   * drifts whenever the paginated cache holds duplicate entries. Callers that
+   * already know the id (in-chat search) should pass it and skip that maths.
+   */
+  gotoRequest: { chatId: string; messageNumber: number; messageId?: string; token: number } | null;
+  /** Whether the "Find in chat" panel is open for the active chat. */
+  chatSearchOpen: boolean;
+  /**
+   * Message number (1-based, matching /goto) the search last jumped to, so the
+   * message list can mark it. Cleared when the panel closes.
+   */
+  chatSearchCurrent: number | null;
   /** Mounted Conversation call snapshot. Runtime-only so the call can minimize while navigating. */
   activeConversationCall: ActiveConversationCallSnapshot | null;
   /** When true, show the active Conversation call as the full call surface instead of the micro panel. */
@@ -346,6 +359,10 @@ interface ChatState {
   dismissNotification: (chatId: string) => void;
   dismissNotifications: (chatIds: string[]) => void;
   requestGotoMessage: (chatId: string, messageNumber: number) => void;
+  requestGotoMessageId: (chatId: string, messageId: string, messageNumber: number) => void;
+  openChatSearch: () => void;
+  closeChatSearch: () => void;
+  setChatSearchCurrent: (messageNumber: number | null) => void;
   clearGotoRequest: () => void;
   setActiveConversationCall: (snapshot: ActiveConversationCallSnapshot | null) => void;
   updateActiveConversationCallSession: (session: ConversationCallSession) => void;
@@ -396,6 +413,8 @@ export const useChatStore = create<ChatState>()(
     chatNotifications: new Map(),
     dismissedNotifications: new Set(),
     gotoRequest: null,
+    chatSearchOpen: false,
+    chatSearchCurrent: null,
     activeConversationCall: null,
     conversationCallExpanded: false,
 
@@ -405,6 +424,10 @@ export const useChatStore = create<ChatState>()(
       if (id !== prev) {
         currentInputSnapshot = "";
         clearCurrentInputPresenceTimer();
+        // Search is scoped to one chat, so it must never follow you into the
+        // next one — including into Game mode, which has no message transcript
+        // to jump through and therefore no search affordance.
+        set({ chatSearchOpen: false, chatSearchCurrent: null });
       }
       // Clear unread for the chat being opened
       if (id) {
@@ -999,7 +1022,20 @@ export const useChatStore = create<ChatState>()(
           token: (state.gotoRequest?.token ?? 0) + 1,
         },
       })),
+    requestGotoMessageId: (chatId, messageId, messageNumber) =>
+      set((state) => ({
+        gotoRequest: {
+          chatId,
+          messageNumber,
+          messageId,
+          token: (state.gotoRequest?.token ?? 0) + 1,
+        },
+      })),
     clearGotoRequest: () => set({ gotoRequest: null }),
+
+    openChatSearch: () => set({ chatSearchOpen: true }),
+    closeChatSearch: () => set({ chatSearchOpen: false, chatSearchCurrent: null }),
+    setChatSearchCurrent: (messageNumber) => set({ chatSearchCurrent: messageNumber }),
 
     setActiveConversationCall: (snapshot) =>
       set((state) => {
@@ -1070,6 +1106,8 @@ export const useChatStore = create<ChatState>()(
         chatNotifications: new Map(),
         dismissedNotifications: new Set(),
         gotoRequest: null,
+        chatSearchOpen: false,
+        chatSearchCurrent: null,
         activeConversationCall: null,
         conversationCallExpanded: false,
       });

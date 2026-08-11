@@ -121,6 +121,7 @@ import { HomeCreditsModal } from "./HomeCreditsModal";
 import { HomeBrowserHub } from "./HomeBrowserHub";
 import { NewChatConnectionGate } from "./NewChatConnectionGate";
 import { ChatCommonOverlays, preloadChatSettingsDrawer, type ChatSettingsInitialSection } from "./ChatCommonOverlays";
+import { ChatSearchPanel } from "./ChatSearchPanel";
 import { CreatorNotesCssInjector, type CardCssMode, type PersonaCssRow } from "./CreatorNotesCssInjector";
 import type { ChatModeFilter } from "../../lib/card-css";
 import {
@@ -402,6 +403,9 @@ function areCharacterMapsEqual(a: CharacterMap, b: CharacterMap): boolean {
   }
   return true;
 }
+
+/** Frames a /goto jump waits for the surface to mount its target message. */
+const GOTO_MOUNT_ATTEMPTS = 30;
 
 const ChatConversationSurface = lazy(async () => {
   const module = await import("./ChatConversationSurface");
@@ -2639,7 +2643,10 @@ export const ChatArea = memo(function ChatArea() {
     if (!messages) return;
 
     const targetNumber = gotoRequest.messageNumber;
-    if (totalMessageCount > 0 && targetNumber > totalMessageCount) {
+    const requestedId = gotoRequest.messageId;
+
+    // A number has to be validated against the chat length; an id does not.
+    if (!requestedId && totalMessageCount > 0 && targetNumber > totalMessageCount) {
       toast.error(
         localizeUi("ui.chat.chatarea.messageValue1DoesnTExistThisChatHasValue2", {
           value1: targetNumber,
@@ -2650,22 +2657,39 @@ export const ChatArea = memo(function ChatArea() {
       return;
     }
 
+    // With an id, "is it loaded?" is a lookup rather than index arithmetic, so
+    // the jump is unaffected by duplicate entries in the paginated cache.
     const targetIndex = targetNumber - 1; // 0-based global index
-    if (targetIndex >= messageOffset) {
-      const targetId = messageIdByOrderIndex.get(targetIndex);
+    const isLoaded = requestedId ? messages.some((message) => message.id === requestedId) : targetIndex >= messageOffset;
+
+    if (isLoaded) {
+      const targetId = requestedId ?? messageIdByOrderIndex.get(targetIndex);
       if (!targetId) {
         useChatStore.getState().clearGotoRequest();
         return;
       }
-      // Wait one frame so newly-loaded messages are painted before scrolling.
-      const raf = requestAnimationFrame(() => {
+      // The message may be loaded but not yet mounted: the surfaces render only
+      // MAX_MOUNTED_TRANSCRIPT_MESSAGES at a time and move their window in
+      // response to this same request. Retry for a few frames rather than
+      // giving up after one, which used to make /goto a silent no-op for any
+      // target outside the mounted window.
+      let raf = 0;
+      let attempts = 0;
+      const tryScroll = () => {
         const el = document.querySelector(`[data-message-id="${CSS.escape(targetId)}"]`);
         if (el instanceof HTMLElement) {
           el.scrollIntoView({ behavior: "smooth", block: "center" });
           userScrolledAwayRef.current = true; // suppress auto-scroll-to-bottom hijacking the jump
+          useChatStore.getState().clearGotoRequest();
+          return;
         }
-        useChatStore.getState().clearGotoRequest();
-      });
+        if (++attempts > GOTO_MOUNT_ATTEMPTS) {
+          useChatStore.getState().clearGotoRequest();
+          return;
+        }
+        raf = requestAnimationFrame(tryScroll);
+      };
+      raf = requestAnimationFrame(tryScroll);
       return () => cancelAnimationFrame(raf);
     }
 
@@ -2922,6 +2946,7 @@ export const ChatArea = memo(function ChatArea() {
         {cardCssInjector}
         {scheduleModal}
         {resourceDropOverlay}
+        <ChatSearchPanel />
         <Suspense fallback={surfaceFallback}>
           <ChatConversationSurface
             activeChatId={activeChatId}
@@ -3019,6 +3044,7 @@ export const ChatArea = memo(function ChatArea() {
       {cardCssInjector}
       {scheduleModal}
       {resourceDropOverlay}
+      <ChatSearchPanel />
       <Suspense fallback={surfaceFallback}>
         <ChatRoleplaySurface
           activeChatId={activeChatId}

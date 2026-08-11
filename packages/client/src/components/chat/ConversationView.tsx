@@ -22,6 +22,7 @@ import { SceneBanner, EndSceneBar } from "./SceneBanner";
 import { ChatBranchSelector } from "./ChatBranchSelector";
 import { ActiveLorebookEntriesButton } from "./ActiveLorebookEntriesButton";
 import { ChatToolbarButton, ChatToolbarMenu, getChatToolbarButtonClass } from "./ChatToolbarControls";
+import { ChatSearchButton } from "./ChatSearchButton";
 import { ConversationPresenceCard } from "./ConversationPresenceCard";
 import { PendingTypingDots } from "./PendingTypingDots";
 import { TranscriptWindowControls } from "./TranscriptWindowControls";
@@ -32,7 +33,11 @@ import { useUIStore } from "../../stores/ui.store";
 import { playConfiguredNotificationPing } from "../../lib/notification-sound";
 import { useRenderTimer } from "../../lib/perf-diagnostics";
 import { messageHasPendingPostProcessing } from "../../lib/chat-message-extra";
-import { getTranscriptRenderWindow, TRANSCRIPT_RENDER_WINDOW_STEP } from "../../lib/transcript-render-window";
+import {
+  getTranscriptRenderWindow,
+  getTranscriptWindowStartForIndex,
+  TRANSCRIPT_RENDER_WINDOW_STEP,
+} from "../../lib/transcript-render-window";
 import { useThrottledStreamBuffer } from "../../hooks/use-throttled-stream-buffer";
 import { useConversationCustomEmojis } from "../../hooks/use-conversation-custom-emojis";
 import { useConversationCustomStickers } from "../../hooks/use-conversation-custom-stickers";
@@ -484,6 +489,7 @@ export function ConversationView({
         panelAction="settings"
         onClick={onOpenSettings}
       />
+      <ChatSearchButton compact={compact} />
     </>
   );
   const renderHeader = () => (
@@ -705,6 +711,30 @@ export function ConversationView({
   const jumpToLatestTranscriptMessages = useCallback(() => {
     setTranscriptWindowStart(null);
   }, []);
+
+  // A /goto jump can target a message that is loaded but not mounted, because
+  // only MAX_MOUNTED_TRANSCRIPT_MESSAGES render at once. Move the render window
+  // onto the target so ChatArea has a DOM node to scroll to.
+  const gotoRequest = useChatStore((s) => s.gotoRequest);
+  useLayoutEffect(() => {
+    if (!gotoRequest || gotoRequest.chatId !== chatId) return;
+    if (!messages?.length) return;
+
+    // Prefer the id: locating by index depends on totalMessageCount matching
+    // messages.length, which duplicate paginated entries break.
+    const targetLoadedIndex = gotoRequest.messageId
+      ? messages.findIndex((message) => message.id === gotoRequest.messageId)
+      : gotoRequest.messageNumber - 1 - (totalMessageCount - messages.length);
+    // Still outside the paginated data — ChatArea fetches older pages first.
+    if (targetLoadedIndex < 0 || targetLoadedIndex >= messages.length) return;
+
+    const nextStart = getTranscriptWindowStartForIndex(
+      targetLoadedIndex,
+      messages.length,
+      transcriptWindow.startIndex,
+    );
+    if (nextStart !== null) setTranscriptWindowStart(nextStart);
+  }, [gotoRequest, chatId, messages, totalMessageCount, transcriptWindow.startIndex]);
 
   useLayoutEffect(() => {
     if (!chatId || isFetchingNextPage || isLoadingMoreRef.current) return;
