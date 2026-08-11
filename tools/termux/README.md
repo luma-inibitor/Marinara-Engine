@@ -39,9 +39,10 @@ marinara dev luma-inibitor/Marinara-Engine patch/mari-unsandboxed-shell
 ```
 
 - Clones (shallow) to `~/marinara-dev/<owner-repo-branch>` and runs it on **port 7870** (so it never collides with a running fork/main on 7860). View it in a browser at `http://127.0.0.1:7870`.
-- **Fully isolated data** — its own `DATA_DIR` inside the throwaway checkout; it never reads or writes the shared `~/marinara-data` or the fork/main clones. On first boot it auto-seeds the default data (Mari, preset, backgrounds, a connection, game assets).
+- **Fully isolated data** — its own `DATA_DIR` inside the throwaway checkout; it never reads or writes the shared `~/marinara-data` or the fork/main clones. On first boot it auto-seeds the app's default data (Mari, preset, backgrounds, game assets) and writes a persisted `ENCRYPTION_KEY` so it can hold connections.
+- **Auto-seeds test chats.** On the first launch of each checkout it clones the fixture harness to `~/st-notes` (if absent) and, once the server is up, seeds Conversation, Roleplay, and Game chats in the background so all three sidebar tabs have content. It creates a placeholder connection for the Game fixture — nothing generates, the world is applied from the fixture JSON. Re-runs skip seeding (a `.seeded` marker); delete that marker to re-seed. Disable entirely with `MARINARA_DEV_SEED=0`.
 - **You own cleanup.** These are not managed — delete them when done: `rm -rf ~/marinara-dev/<dir>` (the exact path is printed on launch). Re-running the same slug/branch reuses and updates the existing checkout.
-- Config: `MARINARA_DEV_ROOT` (default `~/marinara-dev`), `MARINARA_DEV_PORT` (default `7870`).
+- Config: `MARINARA_DEV_ROOT` (default `~/marinara-dev`), `MARINARA_DEV_PORT` (default `7870`), `MARINARA_DEV_SEED` (default `1`), `MARINARA_STNOTES_DIR` (default `~/st-notes`), `MARINARA_STNOTES_REMOTE`.
 
 Each launch fast-forwards that clone to its remote tip (no-op if already current, so no needless rebuild), then runs the checkout's own `start-termux.sh --skip-update`. The **APK is only the viewer** — start the server with the switcher first, then open the APK. Don't use the APK's "Install / Start" button; it force-checks-out stock into `~/Marinara-Engine` and bypasses this setup.
 

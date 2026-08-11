@@ -21,6 +21,9 @@ MAIN_REMOTE="${MARINARA_MAIN_REMOTE:-https://github.com/Pasta-Devs/Marinara-Engi
 MAIN_BRANCH="${MARINARA_MAIN_BRANCH:-main}"
 DEV_ROOT="${MARINARA_DEV_ROOT:-$HOME/marinara-dev}"
 DEV_PORT="${MARINARA_DEV_PORT:-7870}"
+SEED_FIXTURES="${MARINARA_DEV_SEED:-1}"
+ST_NOTES_DIR="${MARINARA_STNOTES_DIR:-$HOME/st-notes}"
+ST_NOTES_REMOTE="${MARINARA_STNOTES_REMOTE:-https://github.com/luma-inibitor/st-notes}"
 LAUNCHER="start-termux.sh"
 
 c_bold=$'\e[1m'; c_grn=$'\e[32m'; c_ylw=$'\e[33m'; c_red=$'\e[31m'; c_dim=$'\e[2m'; c_rst=$'\e[0m'
@@ -81,6 +84,32 @@ launch() {
   exec "./$LAUNCHER" --skip-update
 }
 
+seed_fixtures() {
+  # Runs in the background while the server boots in the foreground. Waits for
+  # health, then loads the conversation/roleplay/game fixtures from the st-notes
+  # harness so the instance has chats in all three modes. Idempotent per dev
+  # checkout via a .seeded marker.
+  local base="$1" dest="$2"
+  local H="$ST_NOTES_DIR/marinara/scripts"
+  local i=0
+  until curl -fsS "$base/api/health" >/dev/null 2>&1; do
+    i=$((i + 1))
+    [ "$i" -ge 180 ] && { warn "Auto-seed: server did not come up in time; skipping. Seed manually if needed."; return; }
+    sleep 2
+  done
+  say ""
+  say "${c_grn}▶ Auto-seeding fixtures (convo + rp + gm)…${c_rst}"
+  node "$H/seed-chat.mjs" --base-url "$base" --file "$H/fixtures/conversation-late-shift.json" || warn "conversation fixture failed"
+  node "$H/seed-chat.mjs" --base-url "$base" --file "$H/fixtures/roleplay-stoke-moran.json" || warn "roleplay fixture failed"
+  # Game world-creation records a connectionId, so a placeholder connection must
+  # exist first — nothing generates; the world is applied from the fixture JSON.
+  curl -s -X POST "$base/api/connections" -H 'content-type: application/json' -H "Origin: $base" \
+    -d '{"name":"Seed Placeholder","provider":"custom","baseUrl":"http://127.0.0.1:9/v1","apiKey":"seed","model":"mock","maxContext":8000}' >/dev/null 2>&1
+  node "$H/seed-chat.mjs" --base-url "$base" --file "$H/fixtures/game-ashfall-contract.json" || warn "game fixture failed"
+  touch "$dest/.seeded"
+  say "${c_grn}✓ Fixtures seeded — reload http://127.0.0.1:$DEV_PORT and check the CONVO / RP / GM tabs.${c_rst}"
+}
+
 dev() {
   # Throwaway checkout of an arbitrary repo/branch with its OWN isolated data.
   # Never touches the shared ~/marinara-data or the fork/main clones. The user
@@ -131,8 +160,27 @@ dev() {
     echo "ADMIN_SECRET=$admin"
   } > "$dest/.env"
 
-  say "${c_grn}Fresh instance auto-seeds default data (Mari, preset, backgrounds, connection, game assets) on first boot.${c_rst}"
+  say "${c_grn}Fresh instance auto-seeds default data (Mari, preset, backgrounds, game assets) on first boot.${c_rst}"
   say "${c_dim}View it at http://127.0.0.1:$DEV_PORT — clean up when done:  rm -rf $dest${c_rst}"
+
+  # Auto-seed the conversation/roleplay/game fixtures from the st-notes harness,
+  # once per checkout. The seeder runs in the background and waits for the server
+  # (which we exec below) to come up. Disable with MARINARA_DEV_SEED=0.
+  if [ "$SEED_FIXTURES" = "1" ] && [ ! -f "$dest/.seeded" ]; then
+    if ! command -v curl >/dev/null 2>&1; then
+      warn "curl not found — skipping auto-seed. Seed manually (see tools/termux/README.md)."
+    else
+      if [ ! -f "$ST_NOTES_DIR/marinara/scripts/seed-chat.mjs" ]; then
+        say "Cloning fixture harness → $ST_NOTES_DIR…"
+        git clone --depth 1 "$ST_NOTES_REMOTE" "$ST_NOTES_DIR" >/dev/null 2>&1 || warn "Could not clone st-notes; skipping auto-seed."
+      fi
+      if [ -f "$ST_NOTES_DIR/marinara/scripts/seed-chat.mjs" ]; then
+        say "${c_dim}Fixtures will auto-seed once the server is up (MARINARA_DEV_SEED=0 to disable).${c_rst}"
+        ( seed_fixtures "http://127.0.0.1:$DEV_PORT" "$dest" ) &
+      fi
+    fi
+  fi
+
   cd "$dest" || die "cd $dest failed"
   # Guarantee the dev .env's DATA_DIR wins even if one is exported in the shell
   # (dotenv does not override an already-set process env var).
