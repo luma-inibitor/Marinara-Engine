@@ -19,6 +19,8 @@ FORK_REMOTE="${MARINARA_FORK_REMOTE:-https://github.com/luma-inibitor/Marinara-E
 FORK_BRANCH="${MARINARA_FORK_BRANCH:-luma/main}"
 MAIN_REMOTE="${MARINARA_MAIN_REMOTE:-https://github.com/Pasta-Devs/Marinara-Engine}"
 MAIN_BRANCH="${MARINARA_MAIN_BRANCH:-main}"
+DEV_ROOT="${MARINARA_DEV_ROOT:-$HOME/marinara-dev}"
+DEV_PORT="${MARINARA_DEV_PORT:-7870}"
 LAUNCHER="start-termux.sh"
 
 c_bold=$'\e[1m'; c_grn=$'\e[32m'; c_ylw=$'\e[33m'; c_red=$'\e[31m'; c_dim=$'\e[2m'; c_rst=$'\e[0m'
@@ -74,6 +76,55 @@ launch() {
   exec "./$LAUNCHER" --skip-update
 }
 
+dev() {
+  # Throwaway checkout of an arbitrary repo/branch with its OWN isolated data.
+  # Never touches the shared ~/marinara-data or the fork/main clones. The user
+  # owns cleanup: rm -rf the printed directory when done.
+  local slug="$1" branch="$2"
+  [ -n "$slug" ] && [ -n "$branch" ] || die "Usage: marinara dev <owner/repo> <branch>"
+  local url="$slug"
+  case "$slug" in *://*|git@*) : ;; *) url="https://github.com/$slug" ;; esac
+  local id dest
+  id="$(printf '%s' "$slug-$branch" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9]+#-#g; s#(^-+|-+$)##g')"
+  dest="$DEV_ROOT/$id"
+  mkdir -p "$DEV_ROOT"
+
+  clear 2>/dev/null || true
+  say "${c_bold}${c_ylw}▶ Marinara — DEV (throwaway)${c_rst}  ${c_dim}$slug @ $branch${c_rst}"
+  say "${c_dim}$dest  ·  port $DEV_PORT  ·  isolated data (no sharing with fork/main)${c_rst}"
+
+  if [ -d "$dest/.git" ]; then
+    say "Reusing existing dev checkout; fetching $branch…"
+    if git -C "$dest" fetch --depth 1 origin "$branch" 2>/dev/null; then
+      git -C "$dest" checkout -B "$branch" FETCH_HEAD 2>/dev/null \
+        || git -C "$dest" checkout -f -B "$branch" FETCH_HEAD 2>/dev/null \
+        || warn "Could not update to $branch; running whatever is checked out."
+    else
+      warn "Fetch failed (offline?). Running the existing checkout."
+    fi
+  else
+    say "Cloning $url ($branch)…"
+    git clone --depth 1 --branch "$branch" "$url" "$dest" || die "Clone failed — check the slug and branch name."
+  fi
+  [ -f "$dest/$LAUNCHER" ] || die "$dest has no $LAUNCHER — not a Marinara checkout?"
+
+  # Isolated .env: dedicated data dir inside the throwaway checkout, distinct
+  # port so it never collides with a running fork/main on 7860.
+  {
+    echo "DATA_DIR=$dest/packages/server/data"
+    echo "PORT=$DEV_PORT"
+    echo "MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL=true"
+  } > "$dest/.env"
+
+  say "${c_grn}Fresh instance auto-seeds default data (Mari, preset, backgrounds, connection, game assets) on first boot.${c_rst}"
+  say "${c_dim}View it at http://127.0.0.1:$DEV_PORT — clean up when done:  rm -rf $dest${c_rst}"
+  cd "$dest" || die "cd $dest failed"
+  # Guarantee the dev .env's DATA_DIR wins even if one is exported in the shell
+  # (dotenv does not override an already-set process env var).
+  unset DATA_DIR FILE_STORAGE_DIR
+  exec "./$LAUNCHER" --skip-update
+}
+
 status() {
   say "${c_bold}Marinara channels${c_rst}"
   local pair name rest dir br h b
@@ -111,8 +162,14 @@ menu() {
 case "${1:-}" in
   fork|f)                launch fork ;;
   main|m|mainline|stock) launch main ;;
+  dev)                   dev "${2:-}" "${3:-}" ;;
   status|st)             status ;;
   ""|menu)               menu ;;
-  -h|--help|help)        say "Usage: marinara [fork|main|status]"; say "  (no args) interactive menu" ;;
-  *)                     die "Unknown command: $1 (try: marinara fork | marinara main | marinara status)" ;;
+  -h|--help|help)
+    say "Usage:"
+    say "  marinara [fork|main]          launch a channel (no args → menu)"
+    say "  marinara dev <owner/repo> <branch>  throwaway isolated checkout of any branch"
+    say "  marinara status               show installed channels"
+    ;;
+  *)                     die "Unknown command: $1 (try: marinara fork | marinara main | marinara dev <slug> <branch> | marinara status)" ;;
 esac

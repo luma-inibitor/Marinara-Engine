@@ -30,6 +30,19 @@ Then install **Termux:Widget** from F-Droid and add its widget to your home scre
 - **Home screen:** tap **Marinara Fork** or **Marinara Mainline**.
 - **Terminal:** `marinara` (menu), or `marinara fork` / `marinara main` / `marinara status`.
 
+### Throwaway dev checkouts
+
+`marinara dev <owner/repo> <branch>` spins up a **one-off** checkout of any repo/branch to test it — for example a PR branch or someone else's fork:
+
+```sh
+marinara dev luma-inibitor/Marinara-Engine patch/mari-unsandboxed-shell
+```
+
+- Clones (shallow) to `~/marinara-dev/<owner-repo-branch>` and runs it on **port 7870** (so it never collides with a running fork/main on 7860). View it in a browser at `http://127.0.0.1:7870`.
+- **Fully isolated data** — its own `DATA_DIR` inside the throwaway checkout; it never reads or writes the shared `~/marinara-data` or the fork/main clones. On first boot it auto-seeds the default data (Mari, preset, backgrounds, a connection, game assets).
+- **You own cleanup.** These are not managed — delete them when done: `rm -rf ~/marinara-dev/<dir>` (the exact path is printed on launch). Re-running the same slug/branch reuses and updates the existing checkout.
+- Config: `MARINARA_DEV_ROOT` (default `~/marinara-dev`), `MARINARA_DEV_PORT` (default `7870`).
+
 Each launch fast-forwards that clone to its remote tip (no-op if already current, so no needless rebuild), then runs the checkout's own `start-termux.sh --skip-update`. The **APK is only the viewer** — start the server with the switcher first, then open the APK. Don't use the APK's "Install / Start" button; it force-checks-out stock into `~/Marinara-Engine` and bypasses this setup.
 
 ## How it works (and why it's laid out this way)
