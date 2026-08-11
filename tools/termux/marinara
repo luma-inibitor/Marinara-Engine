@@ -27,6 +27,11 @@ c_bold=$'\e[1m'; c_grn=$'\e[32m'; c_ylw=$'\e[33m'; c_red=$'\e[31m'; c_dim=$'\e[2
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s[warn]%s %s\n' "$c_ylw" "$c_rst" "$*" >&2; }
 die()  { printf '%s[error]%s %s\n' "$c_red" "$c_rst" "$*" >&2; exit 1; }
+gen_hex() { # $1 = number of random bytes, printed as hex
+  node -e "console.log(require('crypto').randomBytes($1).toString('hex'))" 2>/dev/null \
+    || openssl rand -hex "$1" 2>/dev/null \
+    || head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
+}
 
 update_clone() {
   # Fast-forward a deploy clone to its remote branch tip. No-op when already
@@ -109,11 +114,21 @@ dev() {
   [ -f "$dest/$LAUNCHER" ] || die "$dest has no $LAUNCHER — not a Marinara checkout?"
 
   # Isolated .env: dedicated data dir inside the throwaway checkout, distinct
-  # port so it never collides with a running fork/main on 7860.
+  # port so it never collides with a running fork/main on 7860. ENCRYPTION_KEY
+  # lets the instance store connections (needed for Game-mode seeding and any
+  # real connection); both secrets are preserved across re-runs so stored
+  # connections keep decrypting.
+  local enc admin
+  enc="$(grep -E '^ENCRYPTION_KEY=' "$dest/.env" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  admin="$(grep -E '^ADMIN_SECRET=' "$dest/.env" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  [ -n "$enc" ]   || enc="$(gen_hex 32)"
+  [ -n "$admin" ] || admin="$(gen_hex 16)"
   {
     echo "DATA_DIR=$dest/packages/server/data"
     echo "PORT=$DEV_PORT"
     echo "MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL=true"
+    echo "ENCRYPTION_KEY=$enc"
+    echo "ADMIN_SECRET=$admin"
   } > "$dest/.env"
 
   say "${c_grn}Fresh instance auto-seeds default data (Mari, preset, backgrounds, connection, game assets) on first boot.${c_rst}"
