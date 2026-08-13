@@ -1,0 +1,11 @@
+# Patch branches applied onto the upstream base, in order, to build the
+# integration branch. One branch name per line; blank lines and # comments
+# ignored. Order matters when patches touch the same files.
+#
+# Edit this to enable/disable a patch, then run tools/fork/apply-patches.sh.
+# Document every entry in PATCHES.md.
+
+patch/mari-unsandboxed-shell
+patch/capability-relink-node-modules
+patch/chat-search
+patch/fork-tooling
