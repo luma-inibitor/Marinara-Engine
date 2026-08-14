@@ -4,6 +4,8 @@ This is a long-term fork of [Pasta-Devs/Marinara-Engine](https://github.com/Past
 
 For the list of what's actually patched and why, see [`PATCHES.md`](./PATCHES.md). This file is the *how it all works* guide.
 
+Starting a coding session with an AI agent? Paste [`tools/fork/AGENT-BRIEF.md`](./tools/fork/AGENT-BRIEF.md) — it briefs the agent on this workflow, the branch rules, and the UI/UX harness.
+
 ## Branch model
 
 | Branch | Role | Rule |
