@@ -159,6 +159,22 @@ EOF
   fi
 done
 
+# The running build resolves its upstream base by merge-base against whatever
+# remote-tracking refs the checkout happens to have. A deploy clone that has not
+# refetched the mirror since the last rebuild would answer with a stale commit,
+# so record the base we actually built on and let the build read that instead.
+step "Stamping the upstream base onto $INTEGRATION"
+cat > fork-base.json <<EOF
+{
+  "baseRef": "$BASE_REMOTE_REF",
+  "baseCommit": "$NEW_BASE",
+  "baseBranch": "$BASE_BRANCH"
+}
+EOF
+git add fork-base.json || die "Could not stage fork-base.json"
+git commit -q -m "chore(fork): stamp upstream base ${NEW_BASE:0:12}" || die "Could not commit fork-base.json"
+ok "fork-base.json → ${NEW_BASE:0:12} ($BASE_REMOTE_REF)"
+
 if [ "$RUN_CHECK" = "1" ]; then
   step "Validating (pnpm check)"
   pnpm install >/dev/null 2>&1 || warn "pnpm install reported a problem"

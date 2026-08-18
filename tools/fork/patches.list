@@ -7,4 +7,5 @@
 
 patch/mari-unsandboxed-shell
 patch/capability-relink-node-modules
+patch/fork-upstream-diagnostics
 patch/fork-tooling
