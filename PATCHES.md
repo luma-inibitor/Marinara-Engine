@@ -16,12 +16,20 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Staging rebase note:** the prompt-line commit conflicts with staging's Mari work in `workspace-agent.service.ts` (one bullet). Resolution: keep the `%%MARI_SHELL_SANDBOX_LINE%%` token and mirror staging's current tool list into `mariShellSandboxPromptLine()`. The CHANGELOG hunk was dropped to avoid a conflict on every sync. Since 2.4.3 the shell spawner is the generic `spawnWorkspaceSandboxedProcess({ executable, args })`, so the Termux shell resolution moved up into `spawnWorkspaceSandboxedShell()`; `mari db transform` also consumes the sandbox status, and the patch explicitly excludes the `unsandboxed` backend there so untrusted transform scripts keep requiring a real OS sandbox behind their own `MARI_DB_ALLOW_UNSAFE_TRANSFORMS` gate.
 - **Touches:** `packages/server/src/config/runtime-config.ts`, `packages/server/src/services/professor-mari/workspace-shell-sandbox.ts`, `packages/server/src/services/professor-mari/workspace-agent.service.ts`, `packages/shared/src/types/professor-mari-workspace.ts`, `packages/server/src/services/mari-db/mari-transform-sandbox.ts`, `scripts/regressions/professor-mari/shell-sandbox.regression.ts`, `.env.example`, `docs/CONFIGURATION.md`.
 
+### `patch/fork-upstream-diagnostics`
+
+- **What:** Teaches the build to resolve its *fork base* — the newest upstream commit the running checkout contains — and reports it wherever version details already appear. `/api/health` gains a `fork` object (`repo`, `branch`, `baseRef`, `baseCommit`, `baseVersion`, `commitsAhead`); the copied support diagnostics gain `Fork` / `Upstream version` / `Upstream build` / `Upstream commit` lines under the existing `Commit` line; the Updates card gains matching `Fork:` and `Upstream base:` rows. The base is found by taking the merge base of `HEAD` against `upstream/staging`, `upstream/main`, `origin/staging`, `origin/main` and keeping whichever leaves the fewest local commits, so a stock `main` checkout is not mistaken for a fork of `staging`. An optional root `fork-base.json` overrides that search (see below). Resolution order is the build-time snapshot in `build-meta.json`, then `MARINARA_FORK_INFO`, then the live checkout, so container and packaged installs keep reporting it without a `.git` directory.
+- **Why forked:** A support ticket filed from this fork was indistinguishable from one filed against stock upstream — the version, build, and commit all described our build, with nothing naming the upstream release it was built from. Whoever reads the ticket needs both.
+- **Upstream status:** Not submitted. Written to be upstream-offerable — it is generic fork-detection with no reference to this fork, and everything it adds is omitted entirely when the checkout carries no local commits, so stock output is byte-for-byte unchanged. Worth offering if upstream wants it.
+- **Pairs with:** `patch/fork-tooling`, which writes the `fork-base.json` stamp onto the integration branch. The two are independent — the patch falls back to the merge-base search when the stamp is absent, and the stamp is inert without the patch.
+- **Touches:** `packages/server/src/config/build-info.ts`, `packages/server/scripts/write-build-meta.mjs`, `packages/server/src/app.ts`, `packages/client/src/lib/support-diagnostics.ts`, `packages/client/src/components/panels/SettingsPanel.tsx`, `packages/client/src/localization/locales/en.json`, `scripts/regressions/open-issues.regression.ts`.
+
 ### `patch/fork-tooling`
 
-- **What:** The fork's own files — `FORK.md`, `PATCHES.md`, `tools/fork/` (the patch-queue rebuild script), and `tools/termux/` (the on-device switcher, installer, and dev runner). Applied last so it never fights a code patch.
+- **What:** The fork's own files — `FORK.md`, `PATCHES.md`, `tools/fork/` (the patch-queue rebuild script), and `tools/termux/` (the on-device switcher, installer, and dev runner). Applied last so it never fights a code patch. The rebuild script also stamps the base it built on into a root `fork-base.json` commit on the integration branch, which `patch/fork-upstream-diagnostics` reads.
 - **Why forked:** Fork infrastructure; never intended for upstream.
 - **Upstream status:** N/A — fork-only.
-- **Touches:** `FORK.md`, `PATCHES.md`, `tools/`.
+- **Touches:** `FORK.md`, `PATCHES.md`, `tools/`, and `fork-base.json` (written onto the integration branch, never onto a patch branch).
 
 ### `patch/capability-relink-node-modules`
 
