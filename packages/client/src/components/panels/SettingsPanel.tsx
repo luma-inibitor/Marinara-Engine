@@ -216,8 +216,11 @@ import { getClientRuntimeDiagnostics } from "../../lib/client-runtime-diagnostic
 import {
   detectBrowserGpu,
   formatSupportDiagnostics,
+  formatForkBaseBuild,
+  formatForkSummary,
   resolveClientOs,
   type SupportDiagnostics,
+  type SupportDiagnosticsFork,
 } from "../../lib/support-diagnostics";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { downloadJsonFile, sanitizeExportFilenamePart } from "../../lib/download-json";
@@ -7234,6 +7237,7 @@ function AdvancedSettings() {
     version: string;
     commit: string | null;
     build: string;
+    fork: SupportDiagnosticsFork | null;
     serverOs: string;
     memory: {
       heapUsedMiB: number;
@@ -7306,6 +7310,7 @@ function AdvancedSettings() {
       version: health.data?.version ?? APP_VERSION,
       build: health.data?.build ?? APP_VERSION,
       commit: health.data?.commit ?? null,
+      fork: health.data?.fork ?? null,
       serverOs: health.data?.serverOs ?? "",
       serverMemory: health.data?.memory,
       wakeLock: health.data?.wakeLock ?? null,
@@ -7467,6 +7472,8 @@ function AdvancedSettings() {
   const currentReleaseLabel = `v${health.data?.version ?? updateCheck.data?.currentVersion ?? APP_VERSION}`;
   const currentCommit = health.data?.commit ?? updateCheck.data?.currentCommit ?? null;
   const currentBuildLabel = currentCommit ? `Build: ${currentCommit.slice(0, 7)}` : "Build: unavailable";
+  const forkInfo = health.data?.fork ?? null;
+  const forkBaseBuildLabel = forkInfo ? formatForkBaseBuild(forkInfo) : null;
   const commitsBehind = updateCheck.data?.commitsBehind ?? 0;
   const installType = updateCheck.data?.installType ?? "standalone";
   const isIosClient = updateCheck.data?.clientPlatform === "ios";
@@ -7641,6 +7648,17 @@ function AdvancedSettings() {
                 <span>
                   {localizeUi("ui.panels.advancedsettings.branch")} {updateCheck.data.currentBranch}
                 </span>
+              )}
+              {forkInfo && (
+                <>
+                  <span>
+                    {localizeUi("ui.panels.advancedsettings.fork")} {formatForkSummary(forkInfo)}
+                  </span>
+                  <span>
+                    {localizeUi("ui.panels.advancedsettings.upstreamBase")}{" "}
+                    {forkBaseBuildLabel ?? localizeUi("ui.panels.advancedsettings.upstreamBaseUnavailable")}
+                  </span>
+                </>
               )}
             </div>
           </div>
