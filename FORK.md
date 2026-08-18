@@ -48,6 +48,14 @@ It pushes nothing — it prints the exact push commands when the result looks ri
 
 Useful flags: `--list` (show the queue), `--base <ref>` (default `upstream/staging`), `--into <branch>` (default `luma/staging`), `--no-fetch`.
 
+As its last step the script commits a root `fork-base.json` onto the integration branch recording the base it built on:
+
+```json
+{ "baseRef": "upstream/staging", "baseCommit": "<full sha>", "baseBranch": "staging" }
+```
+
+`patch/fork-upstream-diagnostics` reads it so Support Diagnostics can name the exact upstream commit the running build contains. Without it the build falls back to a merge base against whatever remote-tracking refs the device happens to have, which on a clone that has not refetched the mirror answers with a stale commit. It lives only on the integration branch — never commit it to `staging`, `main`, or a `patch/*` branch.
+
 To enable or disable a patch, edit `tools/fork/patches.list` and re-run. Order matters; `patch/fork-tooling` stays last.
 
 <details>
