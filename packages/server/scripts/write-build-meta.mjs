@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +11,7 @@ const COMMIT_LENGTH = 12;
 const GIT_TIMEOUT_MS = 5_000;
 // Keep in sync with FORK_BASE_REF_CANDIDATES in src/config/build-info.ts.
 const FORK_BASE_REF_CANDIDATES = ["upstream/staging", "upstream/main", "origin/staging", "origin/main"];
+const FORK_BASE_STAMP_PATH = resolve(MONOREPO_ROOT, "fork-base.json");
 
 function normalizeCommit(value) {
   const trimmed = value?.trim();
@@ -58,12 +59,39 @@ function readBaseVersion(baseCommit) {
   }
 }
 
-// Baked in at build time so container and packaged installs keep reporting the
-// fork base after the `.git` directory is gone. Mirrors probeForkInfo() in
-// src/config/build-info.ts.
-function resolveForkInfo() {
-  if (!git("rev-parse", "HEAD")) return null;
+function gitOk(...args) {
+  try {
+    execFileSync("git", args, { cwd: MONOREPO_ROOT, stdio: "ignore", timeout: GIT_TIMEOUT_MS });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
+// Optional stamp a fork's release tooling can commit to pin its exact base.
+// Mirrors readForkBaseStamp() in src/config/build-info.ts.
+function resolveStampedBase() {
+  if (!existsSync(FORK_BASE_STAMP_PATH)) return null;
+
+  let stamp;
+  try {
+    stamp = JSON.parse(readFileSync(FORK_BASE_STAMP_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+  const baseRef = typeof stamp?.baseRef === "string" ? stamp.baseRef.trim() : "";
+  if (!baseRef || !/^[0-9a-f]{7,40}$/iu.test(stamp?.baseCommit ?? "")) return null;
+
+  const baseCommit = git("rev-parse", "--verify", "--quiet", `${stamp.baseCommit}^{commit}`);
+  if (!baseCommit) return null;
+  if (!gitOk("merge-base", "--is-ancestor", baseCommit, "HEAD")) return null;
+
+  const commitsAhead = Number.parseInt(git("rev-list", "--count", `${baseCommit}..HEAD`) ?? "", 10);
+  if (!Number.isInteger(commitsAhead) || commitsAhead === 0) return null;
+  return { baseRef, baseCommit, commitsAhead };
+}
+
+function searchMergeBase() {
   let best = null;
   for (const baseRef of FORK_BASE_REF_CANDIDATES) {
     if (!git("rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`)) continue;
@@ -78,6 +106,16 @@ function resolveForkInfo() {
       best = { baseRef, baseCommit, commitsAhead };
     }
   }
+  return best;
+}
+
+// Baked in at build time so container and packaged installs keep reporting the
+// fork base after the `.git` directory is gone. Mirrors probeForkInfo() in
+// src/config/build-info.ts.
+function resolveForkInfo() {
+  if (!git("rev-parse", "HEAD")) return null;
+
+  const best = resolveStampedBase() ?? searchMergeBase();
   if (!best) return null;
 
   return {
