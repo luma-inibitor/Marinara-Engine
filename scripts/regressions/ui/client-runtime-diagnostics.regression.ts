@@ -11,7 +11,12 @@ import {
   registerPreloadErrorRecovery,
   reloadBrowser,
 } from "../../../packages/client/src/lib/browser-runtime.js";
-import { formatSupportDiagnostics, resolveClientOs } from "../../../packages/client/src/lib/support-diagnostics.js";
+import {
+  formatForkBaseBuild,
+  formatForkSummary,
+  formatSupportDiagnostics,
+  resolveClientOs,
+} from "../../../packages/client/src/lib/support-diagnostics.js";
 
 const key = "marinara-client-runtime-events";
 const privateText = "PRIVATE_PROMPT_AND_CHAT_TEXT";
@@ -269,3 +274,70 @@ for (const expectedLine of [
 ]) {
   assert.ok(copiedSupportDiagnostics.includes(expectedLine), `Support diagnostics must include ${expectedLine}`);
 }
+for (const forkOnlyLine of ["Fork:", "Upstream version:", "Upstream build:", "Upstream commit:"]) {
+  assert.ok(
+    !copiedSupportDiagnostics.includes(forkOnlyLine),
+    `Stock checkouts must not report ${forkOnlyLine} in support diagnostics`,
+  );
+}
+const forkedSupportDiagnostics = formatSupportDiagnostics({
+  version: "2.4.2",
+  build: "2.4.2+fedcba654321",
+  commit: "fedcba654321",
+  fork: {
+    repo: "luma-inibitor/Marinara-Engine",
+    branch: "luma/staging",
+    baseRef: "origin/staging",
+    baseCommit: "abcdef123456",
+    baseVersion: "2.4.2",
+    commitsAhead: 6,
+  },
+  serverOs: "Linux 6.8.0 (x64)",
+  clientOs: "macOS 15.6",
+  browser: "Marinara test shell",
+  gpu: "Test GPU",
+  connectionName: "Sol",
+  connectionProvider: "openai",
+  model: "gpt-5.6-sol",
+});
+for (const expectedLine of [
+  "Build: 2.4.2+fedcba654321",
+  "Commit: fedcba654321",
+  "Fork: luma-inibitor/Marinara-Engine @ luma/staging (6 commits ahead of origin/staging)",
+  "Upstream version: 2.4.2",
+  "Upstream build: 2.4.2+abcdef123456",
+  "Upstream commit: abcdef123456",
+]) {
+  assert.ok(
+    forkedSupportDiagnostics.includes(expectedLine),
+    `Fork support diagnostics must include ${expectedLine}`,
+  );
+}
+assert.ok(
+  forkedSupportDiagnostics.indexOf("Fork:") < forkedSupportDiagnostics.indexOf("Server OS:"),
+  "Fork provenance must sit with the version block, above the system details",
+);
+assert.equal(
+  formatForkSummary({
+    repo: null,
+    branch: null,
+    baseRef: null,
+    baseCommit: "abcdef123456",
+    baseVersion: null,
+    commitsAhead: 1,
+  }),
+  "Unknown repository @ detached HEAD (1 commit ahead)",
+  "Fork summaries must degrade gracefully when the remote, branch, and base ref are unknown",
+);
+assert.equal(
+  formatForkBaseBuild({
+    repo: null,
+    branch: null,
+    baseRef: "origin/staging",
+    baseCommit: "abcdef123456",
+    baseVersion: null,
+    commitsAhead: 1,
+  }),
+  "abcdef123456",
+  "An unresolved upstream version must still report the upstream base commit",
+);
