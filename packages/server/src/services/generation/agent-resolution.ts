@@ -21,6 +21,7 @@ import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../llm/local-sidec
 import { sidecarModelService } from "../sidecar/sidecar-model.service.js";
 import type { ResolvedAgent } from "../agents/agent-pipeline.js";
 import { logger } from "../../lib/logger.js";
+import { AGENT_PERF_TAG, agentPerfEnabled } from "../agents/agent-timing.js";
 import {
   buildAgentConnectionUnavailableWarning,
   buildDefaultAgentConnectionWarning,
@@ -256,7 +257,16 @@ async function resolveAgentConnectionProvider(args: {
     return { entry: resolved };
   }
 
+  const _tLookup = Date.now();
   const agentConn = await args.connections.getWithKey(args.connectionId);
+  if (agentPerfEnabled()) {
+    logger.debug(
+      "%s connection lookup %s: %dms (cache miss — resolved once per distinct agent connection, in series)",
+      AGENT_PERF_TAG,
+      args.connectionId,
+      Date.now() - _tLookup,
+    );
+  }
   if (!agentConn) {
     return { entry: null, unavailableReason: "the configured connection was deleted" };
   }
@@ -340,6 +350,7 @@ export async function resolveAgentPipelineAgents({
   onFallback,
   resolveBaseUrl,
 }: ResolveAgentPipelineAgentsArgs): Promise<ResolvedAgentPipelineAgents> {
+  const _tResolve = Date.now();
   const deletedBuiltInTypes = new Set(
     configuredAgents
       .filter((agent) => BUILT_IN_AGENTS.some((builtIn) => builtIn.id === agent.type))
@@ -399,8 +410,19 @@ export async function resolveAgentPipelineAgents({
       });
     }
   };
+  // Two sequential reads before the loop even starts, then one awaited
+  // provider resolution per distinct connection inside it.
+  const _tDefaults = Date.now();
   const defaultAgentConn = await connections.getDefaultForAgents();
   const fallbackAgentConn = await connections.getFallbackForAgents();
+  if (agentPerfEnabled()) {
+    logger.debug(
+      "%s agent default/fallback connection reads: %dms (sequential)",
+      AGENT_PERF_TAG,
+      Date.now() - _tDefaults,
+    );
+  }
+  const _tLoop = Date.now();
   for (const cfg of enabledConfigs) {
     if (hasPerChatAgentList && !perChatAgentSet.has(cfg.type)) continue;
 
@@ -490,6 +512,15 @@ export async function resolveAgentPipelineAgents({
       anthropicExtendedCacheTtl: resolvedProvider.entry.anthropicExtendedCacheTtl,
       cachingAtDepth: resolvedProvider.entry.cachingAtDepth,
     });
+  }
+
+  if (agentPerfEnabled()) {
+    logger.debug(
+      "%s agent config loop: %dms for %d configured agent(s) (serial: settings merge, prompt template resolution, connection resolution)",
+      AGENT_PERF_TAG,
+      Date.now() - _tLoop,
+      enabledConfigs.length,
+    );
   }
 
   const resolvedTypes = new Set(resolvedAgents.map((agent) => agent.type));
@@ -609,6 +640,21 @@ export async function resolveAgentPipelineAgents({
         connectionName: defaultAgentConn.name,
         model: String(defaultAgentConn.model ?? "").trim(),
       }),
+    );
+  }
+
+  if (agentPerfEnabled()) {
+    const phaseCounts = resolvedAgents.reduce<Record<string, number>>((counts, agent) => {
+      counts[agent.phase] = (counts[agent.phase] ?? 0) + 1;
+      return counts;
+    }, {});
+    logger.debug(
+      "%s resolveAgentPipelineAgents: %dms → %d agent(s) across %d distinct connection(s); per phase %j",
+      AGENT_PERF_TAG,
+      Date.now() - _tResolve,
+      resolvedAgents.length,
+      agentProviderCache.size,
+      phaseCounts,
     );
   }
 

@@ -161,6 +161,7 @@ import {
 } from "../services/llm/base-provider.js";
 import { executeToolCalls, formatToolExecutionResultForModel } from "../services/tools/tool-executor.js";
 import { createAgentPipeline, type ResolvedAgent, type AgentInjection } from "../services/agents/agent-pipeline.js";
+import { AGENT_PERF_TAG, agentPerfEnabled } from "../services/agents/agent-timing.js";
 import { DATA_DIR } from "../utils/data-dir.js";
 import {
   executeAgent,
@@ -847,6 +848,34 @@ export async function generateRoutes(app: FastifyInstance) {
     }
     let conversationGenerationStartedAt: number | null = null;
     let conversationAssistantSaved = false;
+    // Per-request ledger of time the turn spent *waiting on agents*. Each entry
+    // is wall-clock the user paid for; the `[agent-perf]` summary emitted when
+    // the turn ends shows which phases are worth parallelizing.
+    const agentTurnStartedAt = Date.now();
+    const agentBlockingMs: Record<string, number> = {};
+    const recordAgentBlocking = (label: string, startedAt: number): number => {
+      const elapsed = Date.now() - startedAt;
+      agentBlockingMs[label] = (agentBlockingMs[label] ?? 0) + elapsed;
+      return elapsed;
+    };
+    const logAgentTurnPerfSummary = (): void => {
+      if (!agentPerfEnabled()) return;
+      const entries = Object.entries(agentBlockingMs).filter(([, ms]) => ms > 0);
+      if (entries.length === 0) return;
+      const total = entries.reduce((sum, [, ms]) => sum + ms, 0);
+      const turnMs = Date.now() - agentTurnStartedAt;
+      logger.debug(
+        "%s turn summary: %dms of %dms turn spent waiting on agents (%d%%) — %s",
+        AGENT_PERF_TAG,
+        total,
+        turnMs,
+        turnMs > 0 ? Math.round((total / turnMs) * 100) : 0,
+        entries
+          .sort((a, b) => b[1] - a[1])
+          .map(([label, ms]) => `${label}=${ms}ms`)
+          .join(", "),
+      );
+    };
     const conversationCustomEmojiUrlByName = new Map<string, string>();
     const earlyMeta = parseExtra(chat.metadata) as Record<string, unknown>;
     const shouldAccountAutonomousGeneration =
@@ -2956,6 +2985,7 @@ export async function generateRoutes(app: FastifyInstance) {
           chatConnectionKnownModel?.maxOutput && chatConnectionKnownModel.maxOutput > 0
             ? Math.floor(chatConnectionKnownModel.maxOutput)
             : null;
+        const _tAgentResolve = Date.now();
         const { enabledConfigs, resolvedAgents, agentConnectionWarnings } = await resolveAgentPipelineAgents({
           connections,
           configuredAgents: configuredPromptAgents,
@@ -2981,6 +3011,7 @@ export async function generateRoutes(app: FastifyInstance) {
           onFallback,
           resolveBaseUrl,
         });
+        recordAgentBlocking("resolve-agents", _tAgentResolve);
 
         const builtInAgentTypes = new Set(BUILT_IN_AGENTS.map((agent) => agent.id));
         const createsAssistantMessage = !input.impersonate && !input.regenerateMessageId && !input.continueMessageId;
@@ -4698,6 +4729,14 @@ export async function generateRoutes(app: FastifyInstance) {
             const _tSecretPlot = Date.now();
             directorSecretPlotResults = await runDirectorSecretPlotMaintenance();
             logger.debug("[timing] Narrative Director secret plot: %dms", Date.now() - _tSecretPlot);
+            recordAgentBlocking("pre_gen:director-secret-plot", _tSecretPlot);
+            if (agentPerfEnabled()) {
+              logger.debug(
+                "%s pre-gen: secret plot maintenance ran to completion BEFORE the pre-gen/KR/router fan-out (%d sequential LLM call(s))",
+                AGENT_PERF_TAG,
+                directorSecretPlotResults.length,
+              );
+            }
           }
 
           // Build the pre-gen promise
@@ -4844,7 +4883,19 @@ export async function generateRoutes(app: FastifyInstance) {
             : Promise.resolve(null);
 
           // Run all three in parallel
+          const _tPreGenGate = Date.now();
           const [preGenResult, krResult, routerResult] = await Promise.all([preGenPromise, krPromise, krRouterPromise]);
+          const preGenGateMs = recordAgentBlocking("pre_gen:gate", _tPreGenGate);
+          if (agentPerfEnabled()) {
+            logger.debug(
+              "%s pre-gen gate: %dms blocking the main generation (preGen=%s knowledgeRetrieval=%s knowledgeRouter=%s ran concurrently) — every ms here delays the first streamed token",
+              AGENT_PERF_TAG,
+              preGenGateMs,
+              hasPreGenAgents,
+              shouldRunKR,
+              shouldRunRouter,
+            );
+          }
           contextInjections = [...reviewedAgentInjections, ...preGenResult];
 
           // ── Failure gate: only block generation if a critical pre-gen agent failed ──
@@ -7524,11 +7575,23 @@ export async function generateRoutes(app: FastifyInstance) {
         // Await parallel agents that were started alongside the generation
         let parallelResults: AgentResult[] = [];
         if (parallelPromise) {
+          const _tParallelJoin = Date.now();
           try {
             const completedParallelResults = await parallelPromise;
             if (!recoveredAlreadyAppliedOwnerTurn) parallelResults = completedParallelResults;
           } catch {
             // Non-critical — parallel agents may fail independently
+          }
+          // Parallel agents are supposed to hide inside the main generation.
+          // Whatever is left here is overhang the user waits for on top of it.
+          const parallelOverhangMs = recordAgentBlocking("parallel:overhang", _tParallelJoin);
+          if (agentPerfEnabled()) {
+            logger.debug(
+              "%s parallel phase overhang: %dms still outstanding after the main generation finished (%d result(s)) — 0ms means the phase was fully hidden behind generation",
+              AGENT_PERF_TAG,
+              parallelOverhangMs,
+              parallelResults.length,
+            );
           }
         }
         deferParallelAgentEvents = false;
@@ -7894,6 +7957,7 @@ export async function generateRoutes(app: FastifyInstance) {
             return { ...result, data: spriteData };
           };
 
+          const _tPostGen = Date.now();
           let postResults = hasPostProcessingAgents
             ? [
                 ...(await pipeline.postGenerate(completedResponse, {
@@ -7903,6 +7967,16 @@ export async function generateRoutes(app: FastifyInstance) {
                 ...parallelResults,
               ]
             : [...parallelResults];
+          if (hasPostProcessingAgents) {
+            const postGenMs = recordAgentBlocking("post_processing:phase", _tPostGen);
+            if (agentPerfEnabled()) {
+              logger.debug(
+                "%s post-processing phase: %dms after the response was complete — the user sees this as the turn not finishing",
+                AGENT_PERF_TAG,
+                postGenMs,
+              );
+            }
+          }
 
           if (lorebookKeeperAgent) {
             const historicalLorebookTarget = getLorebookKeeperAutomaticTarget(
@@ -7916,12 +7990,23 @@ export async function generateRoutes(app: FastifyInstance) {
 
             if (lorebookKeeperContext && processedMessageId) {
               lorebookKeeperProcessedMessageId = processedMessageId;
+              // Runs strictly after the post-processing phase rather than inside
+              // it, so its latency adds to the turn instead of overlapping.
+              const _tLorebookKeeper = Date.now();
               const lorebookKeeperResult = await executeAgent(
                 lorebookKeeperAgent,
                 lorebookKeeperContext,
                 lorebookKeeperAgent.provider,
                 lorebookKeeperAgent.model,
               );
+              const lorebookKeeperMs = recordAgentBlocking("post_processing:lorebook-keeper", _tLorebookKeeper);
+              if (agentPerfEnabled()) {
+                logger.debug(
+                  "%s lorebook-keeper: %dms, run sequentially AFTER the post-processing phase (not overlapped with it)",
+                  AGENT_PERF_TAG,
+                  lorebookKeeperMs,
+                );
+              }
               const finalizedLorebookKeeperResult = markLorebookResultForApproval(lorebookKeeperResult);
               sendAgentEvent(finalizedLorebookKeeperResult);
               postResults.push(finalizedLorebookKeeperResult);
@@ -7953,6 +8038,9 @@ export async function generateRoutes(app: FastifyInstance) {
                 timedOutFailures.map((result) => result.agentType).join(", "),
               );
             }
+            // Retries are awaited one at a time, so N failed agents cost N
+            // sequential LLM round-trips on top of an already-finished turn.
+            const _tRetries = Date.now();
             const retryResults: AgentResult[] = [];
             for (const failed of retryableFailures) {
               const agentCfg = resolvedAgents.find((a) => a.type === failed.agentType);
@@ -7994,6 +8082,18 @@ export async function generateRoutes(app: FastifyInstance) {
                 retryResults.push(finalizedRetry);
               } catch {
                 retryResults.push(failed);
+              }
+            }
+            if (retryableFailures.length > 0) {
+              const retriesMs = recordAgentBlocking("post_processing:auto-retry", _tRetries);
+              if (agentPerfEnabled()) {
+                logger.debug(
+                  "%s agent auto-retry: %dms for %d agent(s) retried SEQUENTIALLY [%s]",
+                  AGENT_PERF_TAG,
+                  retriesMs,
+                  retryableFailures.length,
+                  retryableFailures.map((result) => result.agentType).join(", "),
+                );
               }
             }
             // Replace original failed results with retry outcomes
@@ -10191,6 +10291,7 @@ export async function generateRoutes(app: FastifyInstance) {
       stopSseKeepalive();
       reply.raw.off("close", onClose);
       releaseActiveGeneration();
+      logAgentTurnPerfSummary();
       if (!clientDisconnected && isSseReplyWritable(reply)) {
         reply.raw.end();
       }

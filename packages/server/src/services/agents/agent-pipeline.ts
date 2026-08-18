@@ -21,6 +21,12 @@ import {
 } from "./agent-executor.js";
 import { logger } from "../../lib/logger.js";
 import { createAgentConcurrencyLimiter, settleAgentJobsWithConcurrencyLimit } from "./agent-concurrency.js";
+import {
+  AGENT_PERF_TAG,
+  agentPerfEnabled,
+  createAgentPerfPhaseTimer,
+  type AgentPerfPhaseTimer,
+} from "./agent-timing.js";
 import { getCustomLorebookReadBehindMessages } from "../../routes/generate/lorebook-keeper-utils.js";
 export { settleAgentJobsWithConcurrencyLimit } from "./agent-concurrency.js";
 
@@ -59,6 +65,12 @@ interface AgentGroup {
   model: string;
   maxParallelJobs: number;
   agents: ResolvedAgent[];
+  /**
+   * The batching key this group was formed from. Two agents only share one LLM
+   * request when their keys match, so logging it explains why a phase produced
+   * N requests instead of one.
+   */
+  key: string;
 }
 
 export const AGENT_PHASE_MAX_CONCURRENT_GROUPS = 8;
@@ -86,6 +98,7 @@ function groupByProviderModel(agents: ResolvedAgent[]): AgentGroup[] {
         model: agent.model,
         maxParallelJobs: normalizeAgentMaxParallelJobs(agent.maxParallelJobs),
         agents: [],
+        key,
       };
       groups.set(key, group);
     } else {
@@ -108,11 +121,12 @@ function splitGroupForParallelJobs(group: AgentGroup): AgentGroup[] {
 
   return chunks
     .filter((agents) => agents.length > 0)
-    .map((agents) => ({
+    .map((agents, shard) => ({
       provider: group.provider,
       model: group.model,
       maxParallelJobs: group.maxParallelJobs,
       agents,
+      key: `${group.key}#shard${shard}`,
     }));
 }
 
@@ -177,10 +191,16 @@ async function executeGroup(
   runWithConnectionLimit: <R>(job: () => Promise<R>) => Promise<R>,
   onResult?: AgentResultCallback,
   resolveAgentContext?: AgentContextResolver,
+  perf?: { timer: AgentPerfPhaseTimer; label: string },
 ): Promise<AgentResult[]> {
+  // Context resolution runs BEFORE the group's LLM call and is awaited inline,
+  // so anything slow in here (DB reads, connection lookups) is pure added
+  // latency that multiplies by the number of groups.
+  const contextSpan = perf?.timer.startSpan(`${perf.label} resolve-context`, { nested: true });
   const groupContext = resolveAgentContext
     ? await resolveAgentContext(group.agents[0]!, buildAgentContext(group.agents[0]!, context))
     : buildAgentContext(group.agents[0]!, context);
+  contextSpan?.end({ resolver: resolveAgentContext ? "custom" : "none" });
   // Separate tool-using agents (can't be batched) from regular agents. Spotify always
   // returns one JSON intent; deterministic host-side playback runs after parsing.
   const toolAgents = group.agents.filter((a) => shouldUseToolsDuringAgentExecution(a));
@@ -201,6 +221,7 @@ async function executeGroup(
     }
   };
 
+  const batchSpan = batchAgents.length > 0 ? perf?.timer.startSpan(`${perf.label} batch`, { nested: true }) : undefined;
   const batchResultsPromise =
     batchAgents.length > 0
       ? executeAgentBatch(
@@ -211,6 +232,7 @@ async function executeGroup(
           resolveAgentContext,
           runWithConnectionLimit,
         ).then((results) => {
+          batchSpan?.end({ agents: batchAgents.length, types: batchAgents.map((a) => a.type).join("|") });
           for (const result of results) {
             safeOnResult(result);
           }
@@ -224,6 +246,7 @@ async function executeGroup(
       AGENT_GROUP_MAX_CONCURRENT_TOOL_CALLS,
     );
   }
+  const toolSpan = toolAgents.length > 0 ? perf?.timer.startSpan(`${perf.label} tools`, { nested: true }) : undefined;
   const toolResultsPromise = settleAgentJobsWithConcurrencyLimit(
     toolAgents,
     AGENT_GROUP_MAX_CONCURRENT_TOOL_CALLS,
@@ -241,6 +264,7 @@ async function executeGroup(
           safeOnResult(result);
           return result;
         }),
+    perf ? `${perf.label} tool-agents` : undefined,
   ).then((settled) =>
     settled.map((entry, index) => {
       if (entry.status === "fulfilled") return entry.value;
@@ -262,7 +286,13 @@ async function executeGroup(
     }),
   );
 
-  const [batchResults, toolResults] = await Promise.all([batchResultsPromise, toolResultsPromise]);
+  const [batchResults, toolResults] = await Promise.all([
+    batchResultsPromise,
+    toolResultsPromise.then((results) => {
+      toolSpan?.end({ agents: toolAgents.length, types: toolAgents.map((a) => a.type).join("|") });
+      return results;
+    }),
+  ]);
   return [...batchResults, ...toolResults];
 }
 
@@ -284,6 +314,7 @@ async function executePhase(
   const phaseAgents = agents.filter((a) => a.phase === phase);
   if (phaseAgents.length === 0) return [];
 
+  const _tGrouping = Date.now();
   const groups = groupByProviderModel(phaseAgents).flatMap(splitGroupForParallelJobs);
   const connectionLimits = new Map<number, number>();
   for (const group of groups) {
@@ -302,6 +333,47 @@ async function executePhase(
     groups.map((g) => `[${g.agents.map((a) => a.type).join(", ")}] (model: ${g.model})`),
   );
 
+  // Grouping decides the whole shape of the phase: how many LLM requests fire,
+  // how wide they can run, and how large each batched request's output budget
+  // is. Dump it so a slow turn can be traced back to "why so many groups?".
+  const perfTimer = createAgentPerfPhaseTimer(`phase "${phase}"`, {
+    agents: phaseAgents.length,
+    groups: groups.length,
+    groupCap: AGENT_PHASE_MAX_CONCURRENT_GROUPS,
+  });
+  if (agentPerfEnabled()) {
+    logger.debug(
+      '%s phase "%s" grouping took %dms — %d agent(s) → %d group(s), connection limits [%s]',
+      AGENT_PERF_TAG,
+      phase,
+      Date.now() - _tGrouping,
+      phaseAgents.length,
+      groups.length,
+      Array.from(connectionLimits.values()).join(", "),
+    );
+    for (const [index, group] of groups.entries()) {
+      logger.debug(
+        '%s phase "%s" group#%d: model=%s agents=%d [%s] maxParallelJobs=%d batchKey=%s',
+        AGENT_PERF_TAG,
+        phase,
+        index,
+        group.model,
+        group.agents.length,
+        group.agents.map((a) => a.type).join(", "),
+        group.maxParallelJobs,
+        group.key,
+      );
+    }
+    if (groups.length > 1 && new Set(groups.map((g) => g.key.split("::").slice(0, 2).join("::"))).size === 1) {
+      logger.debug(
+        '%s phase "%s": %d groups share one provider+model — they split on request context only, so each extra group is an extra sequential-ish LLM request on the same connection',
+        AGENT_PERF_TAG,
+        phase,
+        groups.length,
+      );
+    }
+  }
+
   if (groups.length > AGENT_PHASE_MAX_CONCURRENT_GROUPS) {
     logger.warn(
       '[agent-pipeline] Phase "%s": limiting %d job groups to %d concurrent agent request group(s)',
@@ -311,9 +383,54 @@ async function executePhase(
     );
   }
 
-  const settled = await settleAgentJobsWithConcurrencyLimit(groups, AGENT_PHASE_MAX_CONCURRENT_GROUPS, (group) =>
-    executeGroup(group, context, connectionLimiters.get(providerKey(group.provider))!, onResult, resolveAgentContext),
+  const phaseQueuedAt = Date.now();
+  const settled = await settleAgentJobsWithConcurrencyLimit(
+    groups,
+    AGENT_PHASE_MAX_CONCURRENT_GROUPS,
+    (group, index) => {
+      const label = `group#${index} [${group.agents.map((a) => a.type).join(", ")}]`;
+      const span = perfTimer.startSpan(label, { queuedAt: phaseQueuedAt });
+      return executeGroup(
+        group,
+        context,
+        connectionLimiters.get(providerKey(group.provider))!,
+        onResult,
+        resolveAgentContext,
+        { timer: perfTimer, label },
+      ).finally(() => span.end({ model: group.model, agents: group.agents.length }));
+    },
+    `phase-${phase}-groups`,
   );
+
+  if (agentPerfEnabled()) {
+    for (const [providerId, limiter] of connectionLimiters) {
+      const stats = limiter.stats();
+      logger.debug(
+        '%s phase "%s" connection#%d limiter: limit=%d jobs=%d queued=%d peakActive=%d peakQueueDepth=%d waitTotal=%dms waitMax=%dms',
+        AGENT_PERF_TAG,
+        phase,
+        providerId,
+        stats.limit,
+        stats.totalJobs,
+        stats.queuedJobs,
+        stats.peakActiveJobs,
+        stats.peakQueueDepth,
+        stats.totalWaitMs,
+        stats.maxWaitMs,
+      );
+      if (stats.queuedJobs > 0) {
+        logger.debug(
+          '%s phase "%s" connection#%d spent %dms with agent jobs blocked on maxParallelJobs=%d — raising it on the connection would overlap them',
+          AGENT_PERF_TAG,
+          phase,
+          providerId,
+          stats.totalWaitMs,
+          stats.limit,
+        );
+      }
+    }
+  }
+  perfTimer.finish();
 
   const results: AgentResult[] = [];
   for (let i = 0; i < settled.length; i++) {

@@ -196,6 +196,27 @@ LOG_DISABLE_REQUEST_LOGGING=true
 
 Browser logging is separate and is not controlled by `LOG_LEVEL`.
 
+### Diagnosing slow turns with agents enabled
+
+If a chat gets noticeably slower each time you enable another agent, run with `LOG_LEVEL=debug` and filter the console for `[agent-perf]`:
+
+```
+LOG_LEVEL=debug npm start 2>&1 | grep agent-perf
+```
+
+Every line is tagged `[agent-perf]`. The ones worth reading first:
+
+- **`turn summary`** — how many milliseconds of the whole turn were spent waiting on agents, broken down by phase. Start here.
+- **`pre-gen gate`** — time spent before the reply starts streaming. This is the delay you feel most.
+- **`parallel phase overhang`** — how much of the parallel phase did *not* finish while the main reply was still generating. `0ms` means it was completely hidden.
+- **`post-processing phase`** — time after the reply is complete but before the turn ends.
+- **`phase "<name>"`** — per phase: how many LLM requests it made, how many ran at once (`peak N concurrent`), how much time was spent queued, and which single request was the critical path. A phase with several groups but `peak 1 concurrent` is running one after another.
+- **`group#N`** — which agents were combined into one request, and the batch key they were grouped on. Agents with different keys cannot share a request.
+- **`agent-batch`** — the batch's prompt size, output-token budget, and roughly how much of the request each batched agent cost. A batch is a single request whose output budget is the sum of its agents', so batching more agents makes that one request take longer.
+- **`connection#N limiter`** — whether agent requests queued behind the connection's **Max Parallel Agent Jobs** setting. Non-zero `queued` means raising that setting on the connection would let them overlap.
+
+Lines that call out sequential work (`run SEQUENTIALLY`, `sub-batch`, `retried SEQUENTIALLY`) mark places where latency adds up instead of overlapping.
+
 ## Timeouts
 
 A timeout is the longest time the server waits for a slow job before giving up. Media jobs like image and video generation can be slow, so their timeouts are generous by default. All timeout values are in milliseconds unless the name says otherwise.

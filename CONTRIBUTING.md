@@ -177,6 +177,16 @@ All server-side logging goes through a shared [Pino](https://getpino.io/) logger
 
 - **Route handlers** that already have access to `app.log` or `req.log` may use those instead of the shared logger — they are child loggers of the same Pino instance and inherit the same level.
 
+### Agent performance tracing
+
+The agent pipeline emits a debug-only trace tagged `[agent-perf]` for diagnosing turns that slow down as agents are added. Helpers live in `packages/server/src/services/agents/agent-timing.ts`:
+
+- `agentPerfEnabled()` — gate any bookkeeping that is not free, so the hot path is untouched above `debug`.
+- `createAgentPerfPhaseTimer(scope, context)` — records spans and prints wall clock, achieved parallelism, peak concurrency, idle gaps, queue wait, and the critical path. It returns a no-op recorder when debug logging is off, so callers can instrument unconditionally.
+- `timeAgentPerfStep(label, run)` — one-off timing for a serial awaited step.
+
+When adding instrumentation, keep it to `logger.debug`, keep the `[agent-perf]` tag so `grep agent-perf` finds the whole trace, and say explicitly when a code path is sequential — the point of the trace is to make added latency attributable. The user-facing reading guide is in `docs/CONFIGURATION.md § Logging levels`.
+
 ## Before You Open a Pull Request
 
 1. **Open an issue first.** Before writing code, open an issue or check [the tracker](https://github.com/Pasta-Devs/Marinara-Engine/issues) so we can agree on direction, scope, and whether someone else is already on it.

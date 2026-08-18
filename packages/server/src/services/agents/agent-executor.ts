@@ -39,6 +39,7 @@ import { repairJsonText } from "../../lib/json-repair.js";
 import { wrapContent } from "../prompt/format-engine.js";
 import { sanitizePromptLeaf } from "../prompt/prompt-escaping.js";
 import { settleAgentJobsWithConcurrencyLimit } from "./agent-concurrency.js";
+import { AGENT_PERF_TAG, agentPerfEnabled } from "./agent-timing.js";
 import { normalizeCyoaChoiceOutput } from "./cyoa-choice-normalization.js";
 import { getAssetManifest } from "../game/asset-manifest.service.js";
 import { formatBeholderRequestContext, resolveBeholderStateResponse } from "./beholder-state.js";
@@ -699,6 +700,10 @@ export async function executeAgent(
   toolContext?: AgentToolContext,
 ): Promise<AgentResult> {
   const startTime = Date.now();
+  // Split the agent's wall-clock into prompt build / LLM / parse so a slow
+  // agent can be attributed to the provider rather than to our own work.
+  let promptBuiltAt = startTime;
+  let llmDoneAt = startTime;
 
   try {
     const template = renderAgentPromptTemplate(
@@ -719,6 +724,8 @@ export async function executeAgent(
           : config.type === "spotify"
             ? buildSpotifyAgentMessages(config, template, context)
             : buildStandardAgentMessages(config, template, context);
+
+    promptBuiltAt = Date.now();
 
     const temperature = resolveAgentTemperature(config);
     const maxTokens = applyAgentMaxTokensCaps(
@@ -782,9 +789,25 @@ export async function executeAgent(
       signal: agentCallSignal(context.signal, config.type === "illustrator" ? "illustrator" : undefined),
     });
 
+    llmDoneAt = Date.now();
     if (!responseText && result.content) responseText = result.content;
     responseText = responseText.trim();
     logger.info(`[agent] ${config.type} done (${responseText.length} chars, ${Date.now() - startTime}ms)`);
+    if (agentPerfEnabled()) {
+      logger.debug(
+        "%s agent %s (%s): build %dms, llm %dms, promptChars=%d maxTokens=%d streamed=%s promptTokens=%s completionTokens=%s",
+        AGENT_PERF_TAG,
+        config.type,
+        model,
+        promptBuiltAt - startTime,
+        llmDoneAt - promptBuiltAt,
+        messages.reduce((sum, msg) => sum + msg.content.length, 0),
+        maxTokens,
+        streamResponses,
+        result.usage?.promptTokens ?? "?",
+        result.usage?.completionTokens ?? "?",
+      );
+    }
     logger.debug(`[agent] ${config.type} raw response: ${responseText.slice(0, 500)}`);
     emitAgentDebug(context, {
       stage: "response",
@@ -830,6 +853,7 @@ export async function executeAgent(
         signal: agentCallSignal(context.signal, config.type === "illustrator" ? "illustrator" : undefined),
       });
       totalTokens += retryResult.usage?.totalTokens ?? 0;
+      llmDoneAt = Date.now();
       if (!retryResponseText && retryResult.content) retryResponseText = retryResult.content;
       responseText = retryResponseText.trim();
       logger.info(
@@ -855,6 +879,15 @@ export async function executeAgent(
     const structured = invalidJson
       ? { data: parsed.data, valid: false, error: invalidJsonAgentError(parsed.type) }
       : resolveStructuredAgentResult(config, context, parsed.data);
+    if (agentPerfEnabled()) {
+      logger.debug(
+        "%s agent %s parse+postprocess: %dms (total %dms)",
+        AGENT_PERF_TAG,
+        config.type,
+        Date.now() - llmDoneAt,
+        Date.now() - startTime,
+      );
+    }
     return {
       agentId: config.id,
       agentType: config.type,
@@ -1095,6 +1128,7 @@ export async function executeAgentBatch(
       AGENT_BATCH_FALLBACK_MAX_CONCURRENT,
       async (config) =>
         executeIndividualAgent(config, resolveAgentContext ? await resolveAgentContext(config, context) : context),
+      "agent-batch-isolated",
     );
     return isolatedSettled.map((entry, index) =>
       entry.status === "fulfilled"
@@ -1115,12 +1149,16 @@ export async function executeAgentBatch(
     const batchedConfigs = configs.filter((config) => !shouldRunAgentIndividually(config));
     const [batchedResults, isolatedSettled] = await Promise.all([
       executeAgentBatch(batchedConfigs, context, provider, model, resolveAgentContext, runWithProviderLimit),
-      settleAgentJobsWithConcurrencyLimit(isolatedConfigs, AGENT_BATCH_FALLBACK_MAX_CONCURRENT, (config) =>
-        resolveAgentContext
-          ? Promise.resolve(resolveAgentContext(config, context)).then((agentContext) =>
-              executeIndividualAgent(config, agentContext),
-            )
-          : executeIndividualAgent(config, context),
+      settleAgentJobsWithConcurrencyLimit(
+        isolatedConfigs,
+        AGENT_BATCH_FALLBACK_MAX_CONCURRENT,
+        (config) =>
+          resolveAgentContext
+            ? Promise.resolve(resolveAgentContext(config, context)).then((agentContext) =>
+                executeIndividualAgent(config, agentContext),
+              )
+            : executeIndividualAgent(config, context),
+        "agent-batch-compact",
       ),
     ]);
     const isolatedResults = isolatedSettled.map((entry, index) =>
@@ -1153,10 +1191,43 @@ export async function executeAgentBatch(
       configs.length,
       requestOptionGroups.size,
     );
+    // NOTE: these sub-batches are awaited one at a time, so their latencies ADD
+    // UP. Every distinct request signature (temperature, custom parameters,
+    // caching flags, max output tokens) in the group costs a full extra
+    // round-trip in series.
+    if (agentPerfEnabled()) {
+      logger.debug(
+        "%s agent-batch: %d agents split into %d request-option sub-batch(es) run SEQUENTIALLY — signatures: %s",
+        AGENT_PERF_TAG,
+        configs.length,
+        requestOptionGroups.size,
+        Array.from(requestOptionGroups.values())
+          .map((group) => `[${group.map((c) => c.type).join(", ")}]`)
+          .join(" then "),
+      );
+    }
+    const _tSubBatches = Date.now();
     const groupedResults: AgentResult[] = [];
     for (const group of requestOptionGroups.values()) {
+      const _tSubBatch = Date.now();
       groupedResults.push(
         ...(await executeAgentBatch(group, context, provider, model, resolveAgentContext, runWithProviderLimit)),
+      );
+      if (agentPerfEnabled()) {
+        logger.debug(
+          "%s agent-batch sub-batch [%s]: %dms",
+          AGENT_PERF_TAG,
+          group.map((c) => c.type).join(", "),
+          Date.now() - _tSubBatch,
+        );
+      }
+    }
+    if (agentPerfEnabled()) {
+      logger.debug(
+        "%s agent-batch: %d sequential sub-batch(es) took %dms in total",
+        AGENT_PERF_TAG,
+        requestOptionGroups.size,
+        Date.now() - _tSubBatches,
       );
     }
     return groupedResults;
@@ -1174,6 +1245,8 @@ export async function executeAgentBatch(
   const rawBatchMaxTokens = perAgentTokens.reduce((sum, tokens) => sum + tokens, 0);
   const modelMaxOutput = configs[0]!.maxOutputTokens;
   const batchMaxTokens = applyAgentMaxTokensCaps(provider, rawBatchMaxTokens, modelMaxOutput);
+
+  const buildStartedAt = Date.now();
 
   try {
     // Build merged system prompt (includes the union of context requested by
@@ -1198,6 +1271,8 @@ export async function executeAgentBatch(
         outputFormatBlock: buildAgentOutputFormatBlock(configs, context, renderedTemplates),
       },
     );
+
+    const buildMs = Date.now() - buildStartedAt;
 
     // Each agent reserves its own configured output budget. The context fitter
     // may still reduce this further if the prompt needs more room.
@@ -1237,8 +1312,11 @@ export async function executeAgentBatch(
     // Use streaming (onToken) to keep the connection alive — avoids proxy
     // timeouts (e.g. Cloudflare 524) on large batch responses.
     let responseText = "";
-    const result = await runProviderJob(() =>
-      provider.chatComplete(messages, {
+    const llmQueuedAt = Date.now();
+    let llmStartedAt = llmQueuedAt;
+    const result = await runProviderJob(() => {
+      llmStartedAt = Date.now();
+      return provider.chatComplete(messages, {
         model,
         temperature,
         maxTokens: batchMaxTokens,
@@ -1258,8 +1336,8 @@ export async function executeAgentBatch(
           context.signal,
           configs.some((config) => config.type === "illustrator") ? "illustrator" : undefined,
         ),
-      }),
-    );
+      });
+    });
 
     // chatComplete also accumulates content, but streaming via onToken is
     // the primary path — use whichever is populated.
@@ -1269,6 +1347,36 @@ export async function executeAgentBatch(
     const totalTokens = result.usage?.totalTokens ?? 0;
 
     logger.info(`[agent-batch] Got response (${responseText.length} chars, ${durationMs}ms, ${totalTokens} tokens)`);
+    if (agentPerfEnabled()) {
+      const llmMs = Date.now() - llmStartedAt;
+      const promptChars = messages.reduce((sum, msg) => sum + msg.content.length, 0);
+      // A batch is ONE request whose output budget is the sum of its agents'.
+      // Decoding is sequential, so batch latency scales with the number of
+      // agents batched — unlike N concurrent requests, which scale with the
+      // slowest one. This line is the evidence for that trade-off.
+      logger.debug(
+        "%s agent-batch [%s]: build %dms, provider queue %dms, llm %dms — %d agent(s), promptChars=%d, maxTokens=%d (sum of %s), completionTokens=%s ⇒ ~%dms per batched agent",
+        AGENT_PERF_TAG,
+        configs.map((c) => c.type).join(", "),
+        buildMs,
+        llmStartedAt - llmQueuedAt,
+        llmMs,
+        configs.length,
+        promptChars,
+        batchMaxTokens,
+        perAgentTokens.join("+"),
+        result.usage?.completionTokens ?? "?",
+        Math.round(llmMs / Math.max(1, configs.length)),
+      );
+      if (llmStartedAt - llmQueuedAt > 50) {
+        logger.debug(
+          "%s agent-batch [%s] waited %dms for a connection slot before its request started",
+          AGENT_PERF_TAG,
+          configs.map((c) => c.type).join(", "),
+          llmStartedAt - llmQueuedAt,
+        );
+      }
+    }
     logger.debug(`[agent-batch] ${responseText}`);
     emitAgentDebug(context, {
       stage: "response",
@@ -1288,7 +1396,11 @@ export async function executeAgentBatch(
     });
 
     // Parse the batched response into individual results
+    const _tParse = Date.now();
     const { parsed, failed } = parseBatchResponse(configs, responseText, durationMs, totalTokens);
+    if (agentPerfEnabled()) {
+      logger.debug("%s agent-batch parse: %dms", AGENT_PERF_TAG, Date.now() - _tParse);
+    }
 
     logger.info(
       "[agent-batch] Batch parse: %d parsed, %d failed %s",
@@ -1307,12 +1419,27 @@ export async function executeAgentBatch(
           AGENT_BATCH_FALLBACK_MAX_CONCURRENT,
         );
       }
+      const _tRetries = Date.now();
       const retrySettled = await settleAgentJobsWithConcurrencyLimit(
         failed,
         AGENT_BATCH_FALLBACK_MAX_CONCURRENT,
         async (config) =>
           executeIndividualAgent(config, resolveAgentContext ? await resolveAgentContext(config, context) : context),
+        "agent-batch-fallback",
       );
+      if (agentPerfEnabled()) {
+        // Batch fallback doubles the cost of the affected agents: the batch
+        // request already paid for them once. Frequent fallbacks are a bigger
+        // win to fix than any scheduling change.
+        logger.debug(
+          "%s agent-batch fallback: re-ran %d of %d agent(s) individually in %dms after the batch response failed to parse for [%s]",
+          AGENT_PERF_TAG,
+          failed.length,
+          configs.length,
+          Date.now() - _tRetries,
+          failed.map((c) => c.type).join(", "),
+        );
+      }
       const retries: AgentResult[] = [];
       for (let i = 0; i < retrySettled.length; i++) {
         const entry = retrySettled[i]!;

@@ -2198,6 +2198,7 @@ async function executeRetryBatches(
 
       return groupResults;
     },
+    "retry-agents-groups",
   );
 
   for (const outcome of groupSettled) {
