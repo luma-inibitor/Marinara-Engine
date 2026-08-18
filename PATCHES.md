@@ -13,15 +13,8 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **What:** Adds the opt-in env var `MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL` (default `false`) so Professor Mari's `bash` tool can run on platforms with no OS sandbox — notably Android/Termux, which has neither macOS Seatbelt nor Linux bubblewrap, so `bash` otherwise fails closed. The flag only takes effect when no sandbox backend exists (it never downgrades an available Seatbelt/bubblewrap sandbox), and env secrets are still stripped from the child process; only network-deny and workspace-write confinement are dropped. Also makes Mari's sandbox system-prompt line reflect the live status (sandboxed / disabled / unsandboxed).
 - **Why forked:** Upstream declined the change as a product decision. Kept locally for single-user, on-device Termux use.
 - **Upstream status:** Declined / not merged.
-- **Staging rebase note:** the prompt-line commit conflicts with staging's Mari work in `workspace-agent.service.ts` (one bullet). Resolution: keep the `%%MARI_SHELL_SANDBOX_LINE%%` token and mirror staging's current tool list into `mariShellSandboxPromptLine()`. The CHANGELOG hunk was dropped to avoid a conflict on every sync.
-- **Touches:** `packages/server/src/config/runtime-config.ts`, `packages/server/src/services/professor-mari/workspace-shell-sandbox.ts`, `packages/server/src/services/professor-mari/workspace-agent.service.ts`, `packages/shared/src/types/professor-mari-workspace.ts`, `scripts/regressions/professor-mari-shell-sandbox.regression.ts`, `.env.example`, `docs/CONFIGURATION.md`, `CHANGELOG.md`.
-
-### `patch/chat-search`
-
-- **What:** In-chat message search ("Find in chat") — a search panel and toolbar/overflow entry point, naive client-side matching over the loaded transcript, jump-by-message-id so results survive duplicate paginated entries, newest-first ordering, light-mode-legible highlighting, and a `/goto` fix so jumps can reach messages outside the mounted render window. Ships its own `chat-search` and `transcript-render-window` regressions and an English localization block.
-- **Why forked:** Feature work developed on our fork (branch `claude/chat-search-ui-ux-h6qgyu`), carried until upstream takes it.
-- **Upstream status:** Not submitted. Self-contained and client-side, so it should port cleanly.
-- **Touches:** `packages/client/src/components/chat/*` (incl. new `ChatSearchPanel.tsx`, `ChatSearchButton.tsx`), `packages/client/src/lib/chat-search.ts`, `packages/client/src/lib/transcript-render-window.ts`, `packages/client/src/hooks/use-chat-search.ts`, `packages/client/src/stores/chat.store.ts`, `packages/client/src/styles/globals.css`, `packages/client/src/localization/locales/en.json`, `scripts/regressions/chat-search.regression.ts`, `scripts/regressions/transcript-render-window.regression.ts`, `package.json` (two regression scripts), `docs/chats/*`.
+- **Staging rebase note:** the prompt-line commit conflicts with staging's Mari work in `workspace-agent.service.ts` (one bullet). Resolution: keep the `%%MARI_SHELL_SANDBOX_LINE%%` token and mirror staging's current tool list into `mariShellSandboxPromptLine()`. The CHANGELOG hunk was dropped to avoid a conflict on every sync. Since 2.4.3 the shell spawner is the generic `spawnWorkspaceSandboxedProcess({ executable, args })`, so the Termux shell resolution moved up into `spawnWorkspaceSandboxedShell()`; `mari db transform` also consumes the sandbox status, and the patch explicitly excludes the `unsandboxed` backend there so untrusted transform scripts keep requiring a real OS sandbox behind their own `MARI_DB_ALLOW_UNSAFE_TRANSFORMS` gate.
+- **Touches:** `packages/server/src/config/runtime-config.ts`, `packages/server/src/services/professor-mari/workspace-shell-sandbox.ts`, `packages/server/src/services/professor-mari/workspace-agent.service.ts`, `packages/shared/src/types/professor-mari-workspace.ts`, `packages/server/src/services/mari-db/mari-transform-sandbox.ts`, `scripts/regressions/professor-mari/shell-sandbox.regression.ts`, `.env.example`, `docs/CONFIGURATION.md`.
 
 ### `patch/fork-tooling`
 
@@ -37,3 +30,22 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Upstream status:** Not yet submitted (candidate). Still unfixed on staging as of 2.4.2, and it rebases cleanly.
 - **Touches:** `packages/server/src/services/capability-packages/capability-module-runtime.service.ts`.
 - **Operational note:** Existing installs with an already-dangling link self-heal on the next boot once this patch is deployed. To fix immediately without redeploying, delete the link and relaunch: `rm -f "$DATA_DIR/capability-packages/node_modules"`.
+
+## Retired patches
+
+### `patch/chat-search` — retired on the 2.4.3 sync
+
+Upstream shipped its own in-chat search (`packages/client/src/components/chat/ChatMessageSearch.tsx`, PR #4962 "simple chat search"): a toolbar-anchored Find panel with normalized literal matching, snippets, hidden-message filtering, and jump-to-message. Our version duplicated it, so the branch was retired rather than carried as a second Find entry point.
+
+The same upstream work also landed an equivalent of the branch's one non-search commit — the `/goto` transcript-window fix. Staging's `ConversationView` and `ChatRoleplaySurface` now move the render window onto a pending jump target themselves, and `ChatArea` resolves the target by message **id** via `messageIdByOrderIndex` and paginates older pages until it is loaded. Carrying ours on top redeclared `gotoRequest` in both surfaces and failed the build, so it was retired too.
+
+Deltas ours had that upstream's does not, kept here as candidate follow-up patches:
+
+- The jump target is centred in the render window (`getTranscriptWindowStartForIndex`) instead of pinned as the first mounted message, so it lands with context above it.
+- `ChatArea` retries the post-jump DOM lookup for a bounded number of frames rather than looking once on the next animation frame and clearing the request either way.
+- Search results ordered newest-first.
+- Search result highlight legible in light mode.
+- Search panel dismissed when a mobile shell drawer opens.
+- Search entry point in the chat toolbar overflow menu rather than an always-visible toolbar icon.
+
+The old branch is still on the remote as `patch/chat-search` (based on 2.4.2's `staging`) if any of that needs to be recovered.
