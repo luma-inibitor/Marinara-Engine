@@ -7,5 +7,4 @@
 
 patch/mari-unsandboxed-shell
 patch/capability-relink-node-modules
-patch/chat-search
 patch/fork-tooling
