@@ -28,6 +28,7 @@ import {
 import { eq } from "../../packages/server/src/db/file-query.js";
 import {
   parseBuildMeta,
+  parseForkBaseStamp,
   parseForkInfo,
   resolveBuildBranch,
   resolveRepoSlug,
@@ -1214,6 +1215,24 @@ assert.deepEqual(parseForkInfo({ baseRef: "origin/staging", baseCommit: "abcdef1
   baseVersion: null,
   commitsAhead: 3,
 });
+assert.deepEqual(parseForkBaseStamp({ baseRef: "upstream/staging", baseCommit: "2b3232ff15df" }), {
+  baseRef: "upstream/staging",
+  baseCommit: "2b3232ff15df",
+});
+for (const rejected of [
+  null,
+  "upstream/staging",
+  { baseCommit: "2b3232ff15df" },
+  { baseRef: "upstream/staging" },
+  { baseRef: "   ", baseCommit: "2b3232ff15df" },
+  // Too short to be a commit, and a ref name where a SHA belongs — both would
+  // otherwise be handed to `git rev-parse` as attacker-influenced input.
+  { baseRef: "upstream/staging", baseCommit: "2b323" },
+  { baseRef: "upstream/staging", baseCommit: "HEAD" },
+  { baseRef: "upstream/staging", baseCommit: "--upload-pack=touch /tmp/pwned" },
+]) {
+  assert.equal(parseForkBaseStamp(rejected), null, `A fork-base stamp of ${JSON.stringify(rejected)} must be rejected`);
+}
 for (const [remoteUrl, expectedSlug] of [
   ["https://github.com/luma-inibitor/Marinara-Engine", "luma-inibitor/Marinara-Engine"],
   ["https://github.com/luma-inibitor/Marinara-Engine.git", "luma-inibitor/Marinara-Engine"],
