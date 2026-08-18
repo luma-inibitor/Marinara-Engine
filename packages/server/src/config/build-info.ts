@@ -16,6 +16,10 @@ const GIT_TIMEOUT_MS = 5_000;
 // commits wins, so a stock checkout of `main` is not mistaken for a fork of
 // `staging` (and vice versa).
 const FORK_BASE_REF_CANDIDATES = ["upstream/staging", "upstream/main", "origin/staging", "origin/main"];
+// Optional stamp a fork's release tooling can commit to pin the exact base it
+// built on. Preferred over the merge-base search, whose answer is only as fresh
+// as the checkout's remote-tracking refs.
+const FORK_BASE_STAMP_PATH = resolve(MONOREPO_ROOT, "fork-base.json");
 
 /**
  * Where this checkout sits relative to the upstream branch it was forked from.
@@ -229,6 +233,20 @@ function git(...args: string[]) {
   }
 }
 
+/** For git commands that answer through their exit status rather than stdout. */
+function gitOk(...args: string[]) {
+  try {
+    execFileSync("git", args, {
+      cwd: MONOREPO_ROOT,
+      stdio: "ignore",
+      timeout: GIT_TIMEOUT_MS,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveRepoSlug(remoteUrl: string | null | undefined) {
   const trimmed = remoteUrl?.trim();
   if (!trimmed) return null;
@@ -250,10 +268,49 @@ function readBaseVersion(baseCommit: string) {
   }
 }
 
-function probeForkInfo(): ForkInfo | null {
-  if (!existsSync(resolve(MONOREPO_ROOT, ".git"))) return null;
-  if (!git("rev-parse", "HEAD")) return null;
+/**
+ * The base pinned by `fork-base.json`, if the file names a commit this checkout
+ * actually contains. Everything else about the fork is still derived from git,
+ * so a stale or hand-edited stamp cannot invent a base that is not an ancestor.
+ */
+export function parseForkBaseStamp(value: unknown): { baseRef: string; baseCommit: string } | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const baseRef = typeof candidate.baseRef === "string" ? candidate.baseRef.trim() : "";
+  const baseCommit = typeof candidate.baseCommit === "string" ? candidate.baseCommit.trim() : "";
+  if (!baseRef || !/^[0-9a-f]{7,40}$/iu.test(baseCommit)) return null;
+  return { baseRef, baseCommit };
+}
 
+function readForkBaseStamp() {
+  if (!existsSync(FORK_BASE_STAMP_PATH)) return null;
+
+  let stamp: { baseRef: string; baseCommit: string } | null;
+  try {
+    stamp = parseForkBaseStamp(parseJson(readFileSync(FORK_BASE_STAMP_PATH, "utf8")));
+  } catch {
+    return null;
+  }
+  if (!stamp) return null;
+
+  const baseCommit = git("rev-parse", "--verify", "--quiet", `${stamp.baseCommit}^{commit}`);
+  if (!baseCommit) return null;
+  // An ancestor check is what makes the stamp safe to trust: a base the running
+  // commit does not descend from is a leftover from another branch.
+  if (!gitOk("merge-base", "--is-ancestor", baseCommit, "HEAD")) return null;
+  return { baseRef: stamp.baseRef, baseCommit };
+}
+
+function resolveStampedBase() {
+  const stamped = readForkBaseStamp();
+  if (!stamped) return null;
+
+  const commitsAhead = Number.parseInt(git("rev-list", "--count", `${stamped.baseCommit}..HEAD`) ?? "", 10);
+  if (!Number.isInteger(commitsAhead) || commitsAhead === 0) return null;
+  return { ...stamped, commitsAhead };
+}
+
+function searchMergeBase() {
   let best: { baseRef: string; baseCommit: string; commitsAhead: number } | null = null;
   for (const baseRef of FORK_BASE_REF_CANDIDATES) {
     if (!git("rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`)) continue;
@@ -270,6 +327,14 @@ function probeForkInfo(): ForkInfo | null {
       best = { baseRef, baseCommit, commitsAhead };
     }
   }
+  return best;
+}
+
+function probeForkInfo(): ForkInfo | null {
+  if (!existsSync(resolve(MONOREPO_ROOT, ".git"))) return null;
+  if (!git("rev-parse", "HEAD")) return null;
+
+  const best = resolveStampedBase() ?? searchMergeBase();
   if (!best) return null;
 
   return {
