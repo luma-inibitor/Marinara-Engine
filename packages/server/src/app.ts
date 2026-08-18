@@ -28,7 +28,7 @@ import { APP_VERSION, resetTurnGameRegistry } from "@marinara-engine/shared";
 import { existsSync } from "fs";
 import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { getBuildCommit, getBuildLabel } from "./config/build-info.js";
+import { getBuildCommit, getBuildLabel, getForkInfo } from "./config/build-info.js";
 import {
   getLogLevel,
   getNodeEnv,
@@ -325,6 +325,9 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
       version: APP_VERSION,
       commit,
       build: getBuildLabel(),
+      // `null` on a stock checkout; set when this build carries local commits
+      // on top of an upstream ref, so support tickets can name the fork base.
+      fork: getForkInfo(),
       serverOs: SERVER_OS,
       memory: getRuntimeMemorySnapshot(),
       // Termux background-reliability telemetry (#5655/#5656): the launcher
