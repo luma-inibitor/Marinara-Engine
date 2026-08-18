@@ -1,10 +1,21 @@
 import type { ClientRuntimeDiagnostics } from "./client-runtime-diagnostics";
 
+/** Fork provenance reported by `/health`; `null` on a stock checkout. */
+export interface SupportDiagnosticsFork {
+  repo: string | null;
+  branch: string | null;
+  baseRef: string | null;
+  baseCommit: string | null;
+  baseVersion: string | null;
+  commitsAhead: number | null;
+}
+
 export interface SupportDiagnostics {
   clientRuntime?: ClientRuntimeDiagnostics;
   version: string;
   build: string;
   commit: string | null;
+  fork?: SupportDiagnosticsFork | null;
   serverOs: string;
   serverMemory?: {
     heapUsedMiB: number;
@@ -165,15 +176,42 @@ function formatPreviousSession(diagnostics: SupportDiagnostics): string {
   return `ended without shutting down - last alive ${record.lastSeenAt} (up ${formatUptime(record.uptimeMs)}, RSS ${record.rssMiB} MiB); device rebooted before next launch: ${record.rebootedSince === null ? "unknown" : record.rebootedSince ? "yes" : "no"}`;
 }
 
+/** e.g. `luma-inibitor/Marinara-Engine @ luma/staging (6 commits ahead of origin/staging)`. */
+export function formatForkSummary(fork: SupportDiagnosticsFork): string {
+  const checkout = `${fork.repo?.trim() || "Unknown repository"} @ ${fork.branch?.trim() || "detached HEAD"}`;
+  if (fork.commitsAhead == null) return checkout;
+  const commits = `${fork.commitsAhead} commit${fork.commitsAhead === 1 ? "" : "s"} ahead`;
+  const baseRef = fork.baseRef?.trim();
+  return `${checkout} (${baseRef ? `${commits} of ${baseRef}` : commits})`;
+}
+
+/** e.g. `2.4.3+2b3232ff15df` — the build label of the upstream commit this fork sits on. */
+export function formatForkBaseBuild(fork: SupportDiagnosticsFork): string | null {
+  const version = fork.baseVersion?.trim();
+  const commit = fork.baseCommit?.trim();
+  if (!version) return commit || null;
+  return commit ? `${version}+${commit}` : version;
+}
+
 export function formatSupportDiagnostics(diagnostics: SupportDiagnostics): string {
   const memory = diagnostics.serverMemory;
   const freeze = diagnostics.lastFreeze;
   const unreachable = diagnostics.serverUnreachable === true;
+  const { fork } = diagnostics;
   return [
     "Marinara Engine diagnostics",
     `Version: ${available(diagnostics.version)}`,
     `Build: ${available(diagnostics.build)}`,
     `Commit: ${available(diagnostics.commit)}`,
+    // Omitted entirely on a stock checkout, so upstream tickets read unchanged.
+    ...(fork
+      ? [
+          `Fork: ${formatForkSummary(fork)}`,
+          `Upstream version: ${available(fork.baseVersion)}`,
+          `Upstream build: ${available(formatForkBaseBuild(fork))}`,
+          `Upstream commit: ${available(fork.baseCommit)}`,
+        ]
+      : []),
     // Server OS is static identity: a cached value is still true while the
     // host is frozen, so known data stays. The three telemetry lines below are
     // time-sensitive - stale readings would present pre-freeze state as
