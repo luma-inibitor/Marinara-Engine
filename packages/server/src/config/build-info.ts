@@ -11,14 +11,41 @@ const SERVER_ROOT = resolve(__dirname, "../..");
 const MONOREPO_ROOT = resolve(SERVER_ROOT, "../..");
 const BUILD_META_PATH = resolve(__dirname, "build-meta.json");
 const COMMIT_LENGTH = 12;
+const GIT_TIMEOUT_MS = 5_000;
+// Ordered by preference; the candidate whose merge base leaves the fewest local
+// commits wins, so a stock checkout of `main` is not mistaken for a fork of
+// `staging` (and vice versa).
+const FORK_BASE_REF_CANDIDATES = ["upstream/staging", "upstream/main", "origin/staging", "origin/main"];
+
+/**
+ * Where this checkout sits relative to the upstream branch it was forked from.
+ * `null` for a stock checkout — a build with no local commits on top of an
+ * upstream ref reports nothing extra.
+ */
+export type ForkInfo = {
+  /** Repository slug of the `origin` remote, e.g. `luma-inibitor/Marinara-Engine`. */
+  repo: string | null;
+  /** Checked-out branch, or `null` when detached. */
+  branch: string | null;
+  /** Ref the base commit was resolved against, e.g. `origin/staging`. */
+  baseRef: string;
+  /** Short SHA of the newest upstream commit this build contains. */
+  baseCommit: string;
+  /** `package.json` version at `baseCommit`. */
+  baseVersion: string | null;
+  /** Local commits carried on top of `baseCommit`. */
+  commitsAhead: number;
+};
 
 type BuildMeta = {
   commit?: string | null;
   branch?: string | null;
+  fork?: ForkInfo | null;
 };
 
 let cachedCommit: string | null | undefined;
 let cachedBranch: string | null | undefined;
+let cachedFork: ForkInfo | null | undefined;
 let cachedBuildMeta: BuildMeta | null | undefined;
 
 function normalizeCommit(value: string | undefined | null) {
@@ -27,12 +54,46 @@ function normalizeCommit(value: string | undefined | null) {
   return trimmed.slice(0, COMMIT_LENGTH);
 }
 
+function isNullableString(value: unknown) {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function parseJson(value: string | null | undefined): unknown {
+  if (value == null) return null;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+export function parseForkInfo(value: unknown): ForkInfo | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.baseRef !== "string" || !candidate.baseRef.trim()) return null;
+  if (typeof candidate.baseCommit !== "string" || !candidate.baseCommit.trim()) return null;
+  if (typeof candidate.commitsAhead !== "number" || !Number.isInteger(candidate.commitsAhead)) return null;
+  if (!isNullableString(candidate.repo) || !isNullableString(candidate.branch)) return null;
+  if (!isNullableString(candidate.baseVersion)) return null;
+
+  return {
+    repo: (candidate.repo as string | null | undefined) ?? null,
+    branch: (candidate.branch as string | null | undefined) ?? null,
+    baseRef: candidate.baseRef,
+    baseCommit: candidate.baseCommit,
+    baseVersion: (candidate.baseVersion as string | null | undefined) ?? null,
+    commitsAhead: candidate.commitsAhead,
+  };
+}
+
 function isBuildMeta(value: unknown): value is BuildMeta {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as { commit?: unknown; branch?: unknown };
+  const candidate = value as { commit?: unknown; branch?: unknown; fork?: unknown };
   return (
-    (candidate.commit === undefined || candidate.commit === null || typeof candidate.commit === "string") &&
-    (candidate.branch === undefined || candidate.branch === null || typeof candidate.branch === "string")
+    isNullableString(candidate.commit) &&
+    isNullableString(candidate.branch) &&
+    (candidate.fork === undefined || candidate.fork === null || parseForkInfo(candidate.fork) !== null)
   );
 }
 
@@ -152,4 +213,98 @@ export function getBuildBranch() {
 export function getBuildLabel() {
   const commit = getBuildCommit();
   return commit ? `${APP_VERSION}+${commit}` : APP_VERSION;
+}
+
+function git(...args: string[]) {
+  try {
+    const stdout = execFileSync("git", args, {
+      cwd: MONOREPO_ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: GIT_TIMEOUT_MS,
+    });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveRepoSlug(remoteUrl: string | null | undefined) {
+  const trimmed = remoteUrl?.trim();
+  if (!trimmed) return null;
+  const match = /(?:[/:])([^/:]+)\/([^/]+?)(?:\.git)?\/?$/u.exec(trimmed);
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+function readBaseVersion(baseCommit: string) {
+  const manifest = git("show", `${baseCommit}:package.json`);
+  if (!manifest) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(manifest);
+    if (parsed === null || typeof parsed !== "object") return null;
+    const version = (parsed as { version?: unknown }).version;
+    return typeof version === "string" && version.trim() ? version.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function probeForkInfo(): ForkInfo | null {
+  if (!existsSync(resolve(MONOREPO_ROOT, ".git"))) return null;
+  if (!git("rev-parse", "HEAD")) return null;
+
+  let best: { baseRef: string; baseCommit: string; commitsAhead: number } | null = null;
+  for (const baseRef of FORK_BASE_REF_CANDIDATES) {
+    if (!git("rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`)) continue;
+
+    const baseCommit = git("merge-base", "HEAD", baseRef);
+    if (!baseCommit) continue;
+
+    const commitsAhead = Number.parseInt(git("rev-list", "--count", `${baseCommit}..HEAD`) ?? "", 10);
+    if (!Number.isInteger(commitsAhead)) continue;
+    // A stock checkout sitting exactly on an upstream ref is not a fork; stop
+    // as soon as one candidate proves that, so no further probing is needed.
+    if (commitsAhead === 0) return null;
+    if (!best || commitsAhead < best.commitsAhead) {
+      best = { baseRef, baseCommit, commitsAhead };
+    }
+  }
+  if (!best) return null;
+
+  return {
+    repo: resolveRepoSlug(git("remote", "get-url", "origin")),
+    branch: normalizeBranch(git("branch", "--show-current")),
+    baseRef: best.baseRef,
+    baseCommit: normalizeCommit(best.baseCommit) ?? best.baseCommit,
+    baseVersion: readBaseVersion(best.baseCommit),
+    commitsAhead: best.commitsAhead,
+  };
+}
+
+/**
+ * Fork provenance for this build, or `null` when the checkout carries no local
+ * commits on top of an upstream ref. Resolved from the build-time metadata
+ * first (so container and CI builds keep reporting it without a `.git`
+ * directory), then `MARINARA_FORK_INFO`, then the live checkout.
+ */
+export function getForkInfo(): ForkInfo | null {
+  if (cachedFork !== undefined) return cachedFork;
+
+  // A built artifact records `fork` either way, so `null` there means "built
+  // from a stock checkout" and must not trigger a runtime probe.
+  const buildMeta = readBuildMeta();
+  if (buildMeta && buildMeta.fork !== undefined) {
+    cachedFork = parseForkInfo(buildMeta.fork);
+    return cachedFork;
+  }
+
+  const envFork = parseForkInfo(parseJson(process.env.MARINARA_FORK_INFO));
+  if (envFork) {
+    cachedFork = envFork;
+    return cachedFork;
+  }
+
+  cachedFork = probeForkInfo();
+  return cachedFork;
 }

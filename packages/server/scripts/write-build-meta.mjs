@@ -12,6 +12,9 @@ const BUILD_META_FILE = "config/build-meta.json";
 const COMMIT_LENGTH = 12;
 // Files Node loads as code. Source maps, type declarations and media cannot stop the server from starting.
 const CODE_FILE = /\.(?:[cm]?js|json)$/u;
+const GIT_TIMEOUT_MS = 5_000;
+// Keep in sync with FORK_BASE_REF_CANDIDATES in src/config/build-info.ts.
+const FORK_BASE_REF_CANDIDATES = ["upstream/staging", "upstream/main", "origin/staging", "origin/main"];
 
 function normalizeCommit(value) {
   const trimmed = value?.trim();
@@ -19,21 +22,76 @@ function normalizeCommit(value) {
   return trimmed.slice(0, COMMIT_LENGTH);
 }
 
-function resolveCommit() {
-  const envCommit = normalizeCommit(process.env.MARINARA_GIT_COMMIT ?? process.env.GITHUB_SHA);
-  if (envCommit) return envCommit;
-
+function git(...args) {
   try {
-    return normalizeCommit(
-      execFileSync("git", ["rev-parse", `--short=${COMMIT_LENGTH}`, "HEAD"], {
+    return (
+      execFileSync("git", args, {
         cwd: MONOREPO_ROOT,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
-      }),
+        timeout: GIT_TIMEOUT_MS,
+      }).trim() || null
     );
   } catch {
     return null;
   }
+}
+
+function resolveCommit() {
+  const envCommit = normalizeCommit(process.env.MARINARA_GIT_COMMIT ?? process.env.GITHUB_SHA);
+  if (envCommit) return envCommit;
+  return normalizeCommit(git("rev-parse", `--short=${COMMIT_LENGTH}`, "HEAD"));
+}
+
+function resolveRepoSlug(remoteUrl) {
+  const trimmed = remoteUrl?.trim();
+  if (!trimmed) return null;
+  const match = /(?:[/:])([^/:]+)\/([^/]+?)(?:\.git)?\/?$/u.exec(trimmed);
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+function readBaseVersion(baseCommit) {
+  const manifest = git("show", `${baseCommit}:package.json`);
+  if (!manifest) return null;
+
+  try {
+    const version = JSON.parse(manifest)?.version;
+    return typeof version === "string" && version.trim() ? version.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Baked in at build time so container and packaged installs keep reporting the
+// fork base after the `.git` directory is gone. Mirrors probeForkInfo() in
+// src/config/build-info.ts.
+function resolveForkInfo() {
+  if (!git("rev-parse", "HEAD")) return null;
+
+  let best = null;
+  for (const baseRef of FORK_BASE_REF_CANDIDATES) {
+    if (!git("rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`)) continue;
+
+    const baseCommit = git("merge-base", "HEAD", baseRef);
+    if (!baseCommit) continue;
+
+    const commitsAhead = Number.parseInt(git("rev-list", "--count", `${baseCommit}..HEAD`) ?? "", 10);
+    if (!Number.isInteger(commitsAhead)) continue;
+    if (commitsAhead === 0) return null;
+    if (!best || commitsAhead < best.commitsAhead) {
+      best = { baseRef, baseCommit, commitsAhead };
+    }
+  }
+  if (!best) return null;
+
+  return {
+    repo: resolveRepoSlug(git("remote", "get-url", "origin")),
+    branch: git("branch", "--show-current"),
+    baseRef: best.baseRef,
+    baseCommit: normalizeCommit(best.baseCommit),
+    baseVersion: readBaseVersion(best.baseCommit),
+    commitsAhead: best.commitsAhead,
+  };
 }
 
 const hashFile = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -53,7 +111,11 @@ export function writeBuildMeta({ failed = false } = {}) {
   mkdirSync(join(DIST_DIR, "config"), { recursive: true });
   writeFileSync(
     join(DIST_DIR, BUILD_META_FILE),
-    `${JSON.stringify({ commit: failed ? null : resolveCommit(), builtAt: new Date().toISOString(), files }, null, 2)}\n`,
+    `${JSON.stringify(
+      { commit: failed ? null : resolveCommit(), fork: resolveForkInfo(), builtAt: new Date().toISOString(), files },
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
 }
