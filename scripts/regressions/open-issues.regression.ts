@@ -26,7 +26,12 @@ import {
   messages,
 } from "../../packages/server/src/db/schema/index.js";
 import { eq } from "../../packages/server/src/db/file-query.js";
-import { parseBuildMeta, resolveBuildBranch } from "../../packages/server/src/config/build-info.js";
+import {
+  parseBuildMeta,
+  parseForkInfo,
+  resolveBuildBranch,
+  resolveRepoSlug,
+} from "../../packages/server/src/config/build-info.js";
 import { createSerializedMutationQueue } from "../../packages/client/src/lib/serialized-mutation-queue.js";
 import {
   CUSTOM_AGENT_RESULT_EXAMPLES,
@@ -382,7 +387,12 @@ import { resolveProfessorMariNavigation } from "../../packages/client/src/lib/pr
 import { resolveCapabilityPackageDisplay } from "../../packages/client/src/lib/capability-package-localization.js";
 import { resolveFeatureAgentPackage } from "../../packages/client/src/lib/feature-agent-package.js";
 import { mergeEmbeddedCharacterCardFields } from "../../packages/client/src/lib/character-import.js";
-import { formatSupportDiagnostics, resolveClientOs } from "../../packages/client/src/lib/support-diagnostics.js";
+import {
+  formatForkBaseBuild,
+  formatForkSummary,
+  formatSupportDiagnostics,
+  resolveClientOs,
+} from "../../packages/client/src/lib/support-diagnostics.js";
 import { normalizeHydratedMessage } from "../../packages/client/src/lib/message-hydration.js";
 import { HOME_CHAT_MODE_ACCENTS } from "../../packages/client/src/lib/home-chat-mode-style.js";
 import {
@@ -543,6 +553,73 @@ for (const expectedLine of [
 ]) {
   assert.ok(copiedSupportDiagnostics.includes(expectedLine), `Support diagnostics must include ${expectedLine}`);
 }
+for (const forkOnlyLine of ["Fork:", "Upstream version:", "Upstream build:", "Upstream commit:"]) {
+  assert.ok(
+    !copiedSupportDiagnostics.includes(forkOnlyLine),
+    `Stock checkouts must not report ${forkOnlyLine} in support diagnostics`,
+  );
+}
+const forkedSupportDiagnostics = formatSupportDiagnostics({
+  version: "2.4.2",
+  build: "2.4.2+fedcba654321",
+  commit: "fedcba654321",
+  fork: {
+    repo: "luma-inibitor/Marinara-Engine",
+    branch: "luma/staging",
+    baseRef: "origin/staging",
+    baseCommit: "abcdef123456",
+    baseVersion: "2.4.2",
+    commitsAhead: 6,
+  },
+  serverOs: "Linux 6.8.0 (x64)",
+  clientOs: "macOS 15.6",
+  browser: "Marinara test shell",
+  gpu: "Test GPU",
+  connectionName: "Sol",
+  connectionProvider: "openai",
+  model: "gpt-5.6-sol",
+});
+for (const expectedLine of [
+  "Build: 2.4.2+fedcba654321",
+  "Commit: fedcba654321",
+  "Fork: luma-inibitor/Marinara-Engine @ luma/staging (6 commits ahead of origin/staging)",
+  "Upstream version: 2.4.2",
+  "Upstream build: 2.4.2+abcdef123456",
+  "Upstream commit: abcdef123456",
+]) {
+  assert.ok(
+    forkedSupportDiagnostics.includes(expectedLine),
+    `Fork support diagnostics must include ${expectedLine}`,
+  );
+}
+assert.ok(
+  forkedSupportDiagnostics.indexOf("Fork:") < forkedSupportDiagnostics.indexOf("Server OS:"),
+  "Fork provenance must sit with the version block, above the system details",
+);
+assert.equal(
+  formatForkSummary({
+    repo: null,
+    branch: null,
+    baseRef: null,
+    baseCommit: "abcdef123456",
+    baseVersion: null,
+    commitsAhead: 1,
+  }),
+  "Unknown repository @ detached HEAD (1 commit ahead)",
+  "Fork summaries must degrade gracefully when the remote, branch, and base ref are unknown",
+);
+assert.equal(
+  formatForkBaseBuild({
+    repo: null,
+    branch: null,
+    baseRef: "origin/staging",
+    baseCommit: "abcdef123456",
+    baseVersion: null,
+    commitsAhead: 1,
+  }),
+  "abcdef123456",
+  "An unresolved upstream version must still report the upstream base commit",
+);
 const professorMariWorkspaceSource = readFileSync(
   join(REPOSITORY_ROOT, "packages/server/src/services/professor-mari/workspace-agent.service.ts"),
   "utf8",
@@ -1001,6 +1078,38 @@ assert.equal(
   resolveBuildBranch(undefined, parseBuildMeta(undefined)?.branch, "refs/heads/feature/test"),
   "feature/test",
 );
+const forkBuildMeta = parseBuildMeta(
+  '{"commit":"fedcba654321","fork":{"repo":"luma-inibitor/Marinara-Engine","branch":"luma/staging",' +
+    '"baseRef":"origin/staging","baseCommit":"abcdef123456","baseVersion":"2.4.2","commitsAhead":6}}',
+);
+assert.deepEqual(forkBuildMeta?.fork, {
+  repo: "luma-inibitor/Marinara-Engine",
+  branch: "luma/staging",
+  baseRef: "origin/staging",
+  baseCommit: "abcdef123456",
+  baseVersion: "2.4.2",
+  commitsAhead: 6,
+});
+assert.deepEqual(parseBuildMeta('{"commit":"abcdef123456","fork":null}'), { commit: "abcdef123456", fork: null });
+// A malformed fork block must not silently drop the commit alongside it.
+assert.equal(parseBuildMeta('{"commit":"abcdef123456","fork":{"baseRef":"origin/staging"}}'), null);
+assert.equal(parseForkInfo({ baseRef: "origin/staging", baseCommit: "abcdef123456", commitsAhead: 1.5 }), null);
+assert.deepEqual(parseForkInfo({ baseRef: "origin/staging", baseCommit: "abcdef123456", commitsAhead: 3 }), {
+  repo: null,
+  branch: null,
+  baseRef: "origin/staging",
+  baseCommit: "abcdef123456",
+  baseVersion: null,
+  commitsAhead: 3,
+});
+for (const [remoteUrl, expectedSlug] of [
+  ["https://github.com/luma-inibitor/Marinara-Engine", "luma-inibitor/Marinara-Engine"],
+  ["https://github.com/luma-inibitor/Marinara-Engine.git", "luma-inibitor/Marinara-Engine"],
+  ["git@github.com:Pasta-Devs/Marinara-Engine.git", "Pasta-Devs/Marinara-Engine"],
+  ["", null],
+] as const) {
+  assert.equal(resolveRepoSlug(remoteUrl), expectedSlug, `resolveRepoSlug must handle ${remoteUrl || "an empty URL"}`);
+}
 const lorebookEnglishLocale = JSON.parse(
   readFileSync(join(REPOSITORY_ROOT, "packages/client/src/localization/locales/en.json"), "utf8"),
 ) as Record<string, unknown>;

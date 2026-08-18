@@ -1,7 +1,18 @@
+/** Fork provenance reported by `/health`; `null` on a stock checkout. */
+export interface SupportDiagnosticsFork {
+  repo: string | null;
+  branch: string | null;
+  baseRef: string | null;
+  baseCommit: string | null;
+  baseVersion: string | null;
+  commitsAhead: number | null;
+}
+
 export interface SupportDiagnostics {
   version: string;
   build: string;
   commit: string | null;
+  fork?: SupportDiagnosticsFork | null;
   serverOs: string;
   clientOs: string;
   browser: string;
@@ -47,12 +58,39 @@ function available(value: string | null | undefined): string {
   return value?.trim() || "Unavailable";
 }
 
+/** e.g. `luma-inibitor/Marinara-Engine @ luma/staging (6 commits ahead of origin/staging)`. */
+export function formatForkSummary(fork: SupportDiagnosticsFork): string {
+  const checkout = `${fork.repo?.trim() || "Unknown repository"} @ ${fork.branch?.trim() || "detached HEAD"}`;
+  if (fork.commitsAhead == null) return checkout;
+  const commits = `${fork.commitsAhead} commit${fork.commitsAhead === 1 ? "" : "s"} ahead`;
+  const baseRef = fork.baseRef?.trim();
+  return `${checkout} (${baseRef ? `${commits} of ${baseRef}` : commits})`;
+}
+
+/** e.g. `2.4.3+2b3232ff15df` — the build label of the upstream commit this fork sits on. */
+export function formatForkBaseBuild(fork: SupportDiagnosticsFork): string | null {
+  const version = fork.baseVersion?.trim();
+  const commit = fork.baseCommit?.trim();
+  if (!version) return commit || null;
+  return commit ? `${version}+${commit}` : version;
+}
+
 export function formatSupportDiagnostics(diagnostics: SupportDiagnostics): string {
+  const { fork } = diagnostics;
   return [
     "Marinara Engine diagnostics",
     `Version: ${available(diagnostics.version)}`,
     `Build: ${available(diagnostics.build)}`,
     `Commit: ${available(diagnostics.commit)}`,
+    // Omitted entirely on a stock checkout, so upstream tickets read unchanged.
+    ...(fork
+      ? [
+          `Fork: ${formatForkSummary(fork)}`,
+          `Upstream version: ${available(fork.baseVersion)}`,
+          `Upstream build: ${available(formatForkBaseBuild(fork))}`,
+          `Upstream commit: ${available(fork.baseCommit)}`,
+        ]
+      : []),
     `Server OS: ${available(diagnostics.serverOs)}`,
     `Client OS: ${available(diagnostics.clientOs)}`,
     `Browser / app shell: ${available(diagnostics.browser)}`,

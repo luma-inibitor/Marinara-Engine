@@ -161,7 +161,14 @@ import { useAgentImportPolicy, useSetAgentImportsEnabled } from "../../hooks/use
 import { DraftNumberInput } from "../ui/DraftNumberInput";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
 import { inspectCharacterFilesForEmbeddedLorebooks } from "../../lib/character-import";
-import { detectBrowserGpu, formatSupportDiagnostics, resolveClientOs } from "../../lib/support-diagnostics";
+import {
+  detectBrowserGpu,
+  formatForkBaseBuild,
+  formatForkSummary,
+  formatSupportDiagnostics,
+  resolveClientOs,
+  type SupportDiagnosticsFork,
+} from "../../lib/support-diagnostics";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { downloadJsonFile, sanitizeExportFilenamePart } from "../../lib/download-json";
 import {
@@ -7562,6 +7569,7 @@ function AdvancedSettings() {
     version: string;
     commit: string | null;
     build: string;
+    fork: SupportDiagnosticsFork | null;
     serverOs: string;
   }>({
     queryKey: ["health"],
@@ -7580,6 +7588,7 @@ function AdvancedSettings() {
         version: health.data?.version ?? APP_VERSION,
         build: health.data?.build ?? APP_VERSION,
         commit: health.data?.commit ?? null,
+        fork: health.data?.fork ?? null,
         serverOs: health.data?.serverOs ?? "Unavailable",
         clientOs: resolveClientOs(navigator.userAgent, navigator.platform, navigator.maxTouchPoints),
         browser: navigator.userAgent,
@@ -7709,6 +7718,8 @@ function AdvancedSettings() {
   const currentReleaseLabel = `v${health.data?.version ?? updateCheck.data?.currentVersion ?? APP_VERSION}`;
   const currentCommit = health.data?.commit ?? updateCheck.data?.currentCommit ?? null;
   const currentBuildLabel = currentCommit ? `Build: ${currentCommit.slice(0, 7)}` : "Build: unavailable";
+  const forkInfo = health.data?.fork ?? null;
+  const forkBaseBuildLabel = forkInfo ? formatForkBaseBuild(forkInfo) : null;
   const commitsBehind = updateCheck.data?.commitsBehind ?? 0;
   const installType = updateCheck.data?.installType ?? "standalone";
   const isIosClient = updateCheck.data?.clientPlatform === "ios";
@@ -7843,6 +7854,17 @@ function AdvancedSettings() {
                 <span>
                   {localizeUi("ui.panels.advancedsettings.branch")} {updateCheck.data.currentBranch}
                 </span>
+              )}
+              {forkInfo && (
+                <>
+                  <span>
+                    {localizeUi("ui.panels.advancedsettings.fork")} {formatForkSummary(forkInfo)}
+                  </span>
+                  <span>
+                    {localizeUi("ui.panels.advancedsettings.upstreamBase")}{" "}
+                    {forkBaseBuildLabel ?? localizeUi("ui.panels.advancedsettings.upstreamBaseUnavailable")}
+                  </span>
+                </>
               )}
             </div>
           </div>
