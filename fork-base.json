@@ -1,0 +1,5 @@
+{
+  "baseRef": "upstream/staging",
+  "baseCommit": "f195f57b1f07fb2eec95ee10b20de0ed4d4dce7a",
+  "baseBranch": "staging"
+}
