@@ -2,17 +2,27 @@
 // Chat: Dynamic Weather Effects — ambient particles
 // that change based on roleplay weather + time of day
 // ──────────────────────────────────────────────
-import { useEffect, useRef, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { advanceWeatherFrameClock } from "../../lib/weather-frame-clock";
 import { useReducedAmbientEffects } from "../../hooks/use-reduced-ambient-effects";
 import {
+  AmbientScene,
+  ambientWindAt,
+  createLightningStrike,
   createWeatherParticle,
-  drawWeatherMoon,
+  deriveMoonPhase,
+  drawLightningBolt,
+  drawLightningFlash,
+  drawLuminousMoon,
+  drawLuminousSun,
   drawWeatherParticle,
-  drawWeatherSun,
+  moonAltitude,
   resolveWeatherRenderConfig,
+  sunElevation,
   weatherCelestialX,
   weatherCelestialY,
+  WIND_RESPONSE,
+  type LightningStrike,
   type WeatherParticle,
 } from "../../lib/weather-renderer";
 
@@ -20,11 +30,12 @@ const MAX_CANVAS_DPR = 1;
 const MAX_CANVAS_PIXELS = 1920 * 1080;
 const BASE_FRAME_MS = 1000 / 60;
 const FIREFLY_COUNT = 10;
-const STAR_COUNT = 18;
 
 interface WeatherEffectsProps {
   weather?: string | null;
   timeOfDay?: string | null;
+  /** World tracker date text; drives the lunar phase. */
+  worldDate?: string | null;
   showCelestial?: boolean;
   /** Freeze ambient rendering while local text generation needs the GPU. */
   paused?: boolean;
@@ -34,7 +45,13 @@ interface WeatherEffectsProps {
 // Main component
 // ═══════════════════════════════════════════════
 
-export function WeatherEffects({ weather, timeOfDay, showCelestial = true, paused = false }: WeatherEffectsProps) {
+export function WeatherEffects({
+  weather,
+  timeOfDay,
+  worldDate,
+  showCelestial = true,
+  paused = false,
+}: WeatherEffectsProps) {
   const reduceAmbientEffects = useReducedAmbientEffects();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particlesRef = useRef<WeatherParticle[]>([]);
@@ -53,12 +70,12 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
   const config = useMemo(() => {
     return resolveWeatherRenderConfig(weather, timeOfDay);
   }, [weather, timeOfDay]);
+  const moonPhase = useMemo(() => deriveMoonPhase(worldDate), [worldDate]);
 
   // Render when we have particles, celestial bodies, or time-based ambient effects
   const shouldDrawCelestial = showCelestial && config.celestial !== "none";
   const shouldRender =
-    !reduceAmbientEffects &&
-    (config.count > 0 || config.addFireflies || config.addStars || shouldDrawCelestial || config.sunsetGlow);
+    !reduceAmbientEffects && (config.count > 0 || config.addFireflies || shouldDrawCelestial || config.sceneActive);
 
   useEffect(() => {
     if (!shouldRender) return;
@@ -102,6 +119,7 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
                 type: "init",
                 canvas: offscreen,
                 config,
+                moonPhase,
                 showCelestial,
                 width: rect.width,
                 height: rect.height,
@@ -148,7 +166,10 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
     if (!ctx) return;
 
     let running = true;
+    const scene = new AmbientScene();
     let lightningAlpha = 0; // for lightning flash
+    let lightningStrike: LightningStrike | null = null;
+    let boltAlpha = 0;
     let nextLightning = config.lightning ? 200 + Math.random() * 400 : Infinity;
     let frameCount = 0;
     let previousFrameTime = 0;
@@ -163,6 +184,7 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
       canvas.width = Math.max(1, Math.round(rect.width * canvasScale));
       canvas.height = Math.max(1, Math.round(rect.height * canvasScale));
       ctx.setTransform(canvasScale, 0, 0, canvasScale, 0, 0);
+      scene.resize(rect.width, rect.height);
     };
     resize();
     window.addEventListener("resize", resize);
@@ -178,11 +200,6 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
     if (config.addFireflies) {
       for (let i = 0; i < FIREFLY_COUNT; i++) {
         particlesRef.current.push(createWeatherParticle("firefly", w, h));
-      }
-    }
-    if (config.addStars) {
-      for (let i = 0; i < STAR_COUNT; i++) {
-        particlesRef.current.push(createWeatherParticle("star", w, h));
       }
     }
 
@@ -206,53 +223,36 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
       }
       const frameScale = Math.min(3, Math.max(0.5, frameStep.frameElapsedMs / BASE_FRAME_MS));
 
-      ctx.clearRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
-
-      // Draw ambient overlay tint
-      if (config.tint) {
-        ctx.fillStyle = config.tint;
-        ctx.fillRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
-      }
-      if (config.overlay) {
-        ctx.fillStyle = config.overlay;
-        ctx.fillRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
-      }
-
-      // Lightning flash (epilepsy-safe: capped alpha, gentle decay, long gap between flashes)
-      frameCount += frameScale;
-      if (config.lightning) {
-        if (frameCount >= nextLightning) {
-          lightningAlpha = 0.45 + Math.random() * 0.15; // soft flash, max 0.6
-          nextLightning = frameCount + 400 + Math.random() * 800; // next in ~7-20s at 60fps
-        }
-        if (lightningAlpha > 0) {
-          ctx.fillStyle = `rgba(220,230,255,${lightningAlpha})`;
-          ctx.fillRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
-          lightningAlpha *= Math.pow(0.88, frameScale); // gentle decay
-          if (lightningAlpha < 0.01) lightningAlpha = 0;
-        }
-      }
-
-      // ── Celestial bodies (sun / moon) ──
       const cw = canvas.width / canvasScale;
       const ch = canvas.height / canvasScale;
-      if (shouldDrawCelestial && config.isClearSky) {
+      ctx.clearRect(0, 0, cw, ch);
+      frameCount += frameScale;
+
+      // Sky wash, star field, meteors, aurora
+      scene.drawUnder(ctx, config, frameCount, frameScale);
+
+      // ── Celestial bodies (sun / moon) — dimmed by weather, never hard-hidden ──
+      if (shouldDrawCelestial) {
         const bodyRadius = Math.min(cw, ch) * 0.035; // ~3.5% of smallest dimension
-        const hour = config.hour >= 0 ? config.hour : 12;
+        const hour = config.sceneHour >= 0 ? config.sceneHour : 12;
 
         if (config.celestial === "sun") {
           const sx = weatherCelestialX(hour, cw);
           const sy = weatherCelestialY(hour, ch, false);
-          drawWeatherSun(ctx, sx, sy, bodyRadius, cw, ch, config.sunRays, config.sunsetGlow, frameCount);
+          drawLuminousSun(ctx, sx, sy, bodyRadius, sunElevation(hour), frameCount, config.mood.bodyDim);
         } else if (config.celestial === "moon") {
           // Moon position: map 21h→left, 0h→center, 5h→right
           const moonNorm = hour >= 12 ? ((hour - 21 + 24) % 24) / 10 : (hour + 3) / 10;
           const mx = cw * 0.1 + Math.min(1, Math.max(0, moonNorm)) * cw * 0.8;
           const my = weatherCelestialY(hour, ch, true);
-          drawWeatherMoon(ctx, mx, my, bodyRadius * 1.1, frameCount);
+          drawLuminousMoon(ctx, mx, my, bodyRadius * 1.28, moonAltitude(hour), moonPhase, config.mood.bodyDim);
         }
       }
 
+      // Cloud deck, weather veil, fog banks, horizon glow
+      scene.drawOver(ctx, config, frameCount);
+
+      const wind = ambientWindAt(frameCount) * config.mood.windStrength;
       const particles = particlesRef.current;
 
       for (let i = particles.length - 1; i >= 0; i--) {
@@ -277,6 +277,8 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
           p.x += Math.sin(p.wobble) * 0.8 * frameScale;
           p.y += Math.cos(p.wobble * 0.7) * 0.4 * frameScale;
         }
+        const windResponse = WIND_RESPONSE[p.type];
+        if (windResponse) p.x += wind * windResponse * frameScale;
 
         drawWeatherParticle(ctx, p);
 
@@ -284,6 +286,25 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
         const offScreen = p.y > ch + 20 || p.y < -20 || p.x > cw + 20 || p.x < -20;
         if (offScreen || p.life > p.maxLife) {
           particles[i] = createWeatherParticle(p.type, cw, ch, true);
+        }
+      }
+
+      // Lightning flash (epilepsy-safe: capped alpha, gentle decay, long gap between flashes)
+      if (config.lightning) {
+        if (frameCount >= nextLightning) {
+          lightningAlpha = 0.45 + Math.random() * 0.15; // soft flash, max 0.6
+          nextLightning = frameCount + 400 + Math.random() * 800; // next in ~7-20s at 60fps
+          lightningStrike = createLightningStrike(cw, ch);
+          boltAlpha = 1;
+        }
+        if (lightningAlpha > 0 && lightningStrike) {
+          drawLightningFlash(ctx, lightningStrike, lightningAlpha, cw, ch);
+          if (boltAlpha > 0) {
+            drawLightningBolt(ctx, lightningStrike, boltAlpha);
+            boltAlpha -= frameScale / 8;
+          }
+          lightningAlpha *= Math.pow(0.88, frameScale); // gentle decay
+          if (lightningAlpha < 0.01) lightningAlpha = 0;
         }
       }
 
@@ -307,13 +328,13 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
       window.removeEventListener("resize", resize);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [config, shouldDrawCelestial, shouldRender, showCelestial, workerFailed]);
+  }, [config, moonPhase, shouldDrawCelestial, shouldRender, showCelestial, workerFailed]);
 
   if (!shouldRender) return null;
 
   return (
     <canvas
-      key={`${weather ?? ""}:${timeOfDay ?? ""}:${showCelestial ? "celestial" : "particles"}:${workerFailed ? "fallback" : "worker"}`}
+      key={`${weather ?? ""}:${timeOfDay ?? ""}:${worldDate ?? ""}:${showCelestial ? "celestial" : "particles"}:${workerFailed ? "fallback" : "worker"}`}
       ref={canvasRef}
       className="pointer-events-none absolute inset-0 z-0 h-full w-full transform-gpu [contain:strict] [will-change:transform]"
     />
