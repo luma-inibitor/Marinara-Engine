@@ -202,9 +202,10 @@ function useIsMobileToolbarViewport() {
 function WeatherEffectsConnected({ paused }: { paused: boolean }) {
   const weather = useGameStateStore((s) => s.current?.weather ?? null);
   const timeOfDay = useGameStateStore((s) => s.current?.time ?? null);
+  const worldDate = useGameStateStore((s) => s.current?.date ?? null);
   return (
     <Suspense fallback={null}>
-      <WeatherEffects weather={weather} timeOfDay={timeOfDay} paused={paused} />
+      <WeatherEffects weather={weather} timeOfDay={timeOfDay} worldDate={worldDate} paused={paused} />
     </Suspense>
   );
 }

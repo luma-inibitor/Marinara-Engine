@@ -1,10 +1,19 @@
 import {
+  AmbientScene,
+  ambientWindAt,
+  createLightningStrike,
   createWeatherParticle,
-  drawWeatherMoon,
+  drawLightningBolt,
+  drawLightningFlash,
+  drawLuminousMoon,
+  drawLuminousSun,
   drawWeatherParticle,
-  drawWeatherSun,
+  moonAltitude,
+  sunElevation,
   weatherCelestialX,
   weatherCelestialY,
+  WIND_RESPONSE,
+  type LightningStrike,
   type WeatherParticle,
   type WeatherRenderConfig,
 } from "../lib/weather-renderer";
@@ -13,6 +22,7 @@ type InitMessage = {
   type: "init";
   canvas: OffscreenCanvas;
   config: WeatherRenderConfig;
+  moonPhase: number;
   showCelestial: boolean;
   width: number;
   height: number;
@@ -26,7 +36,6 @@ type WeatherWorkerMessage = InitMessage | ResizeMessage | VisibilityMessage;
 const FRAME_MS = 1000 / 30;
 const BASE_FRAME_MS = 1000 / 60;
 const FIREFLY_COUNT = 10;
-const STAR_COUNT = 18;
 
 let canvas: OffscreenCanvas | null = null;
 let context: OffscreenCanvasRenderingContext2D | null = null;
@@ -42,6 +51,10 @@ let previousTime = 0;
 let frameCount = 0;
 let lightningAlpha = 0;
 let nextLightning = Infinity;
+let lightningStrike: LightningStrike | null = null;
+let boltAlpha = 0;
+let moonPhase = 0.22;
+const scene = new AmbientScene();
 
 function populateParticles() {
   if (!config) return;
@@ -54,11 +67,6 @@ function populateParticles() {
       particles.push(createWeatherParticle("firefly", width, height));
     }
   }
-  if (config.addStars) {
-    for (let index = 0; index < STAR_COUNT; index += 1) {
-      particles.push(createWeatherParticle("star", width, height));
-    }
-  }
 }
 
 function resizeSurface(nextWidth: number, nextHeight: number, nextScale: number) {
@@ -69,6 +77,7 @@ function resizeSurface(nextWidth: number, nextHeight: number, nextScale: number)
   canvas.width = Math.max(1, Math.round(width * scale));
   canvas.height = Math.max(1, Math.round(height * scale));
   context.setTransform(scale, 0, 0, scale, 0, 0);
+  scene.resize(width, height);
 }
 
 function drawFrame(now: number, advanceSimulation = true) {
@@ -83,50 +92,42 @@ function drawFrame(now: number, advanceSimulation = true) {
   frameCount += frameScale;
   context.clearRect(0, 0, width, height);
 
-  if (config.tint) {
-    context.fillStyle = config.tint;
-    context.fillRect(0, 0, width, height);
-  }
-  if (config.overlay) {
-    context.fillStyle = config.overlay;
-    context.fillRect(0, 0, width, height);
-  }
+  // Sky wash, star field, meteors, aurora
+  scene.drawUnder(context, config, frameCount, frameScale);
 
-  if (config.lightning) {
-    if (frameCount >= nextLightning) {
-      lightningAlpha = 0.45 + Math.random() * 0.15;
-      nextLightning = frameCount + 400 + Math.random() * 800;
-    }
-    if (lightningAlpha > 0) {
-      context.fillStyle = `rgba(220,230,255,${lightningAlpha})`;
-      context.fillRect(0, 0, width, height);
-      lightningAlpha *= Math.pow(0.88, frameScale);
-      if (lightningAlpha < 0.01) lightningAlpha = 0;
-    }
-  }
-
-  if (showCelestial && config.isClearSky && config.celestial !== "none") {
+  // Celestial bodies — dimmed by weather via mood.bodyDim, never hard-hidden
+  if (showCelestial && config.celestial !== "none") {
     const radius = Math.min(width, height) * 0.035;
-    const hour = config.hour >= 0 ? config.hour : 12;
+    const hour = config.sceneHour >= 0 ? config.sceneHour : 12;
     if (config.celestial === "sun") {
-      drawWeatherSun(
+      drawLuminousSun(
         context,
         weatherCelestialX(hour, width),
         weatherCelestialY(hour, height, false),
         radius,
-        width,
-        height,
-        config.sunRays,
-        config.sunsetGlow,
+        sunElevation(hour),
         frameCount,
+        config.mood.bodyDim,
       );
     } else {
       const moonPosition = hour >= 12 ? ((hour - 21 + 24) % 24) / 10 : (hour + 3) / 10;
       const moonX = width * 0.1 + Math.min(1, Math.max(0, moonPosition)) * width * 0.8;
-      drawWeatherMoon(context, moonX, weatherCelestialY(hour, height, true), radius * 1.1, frameCount);
+      drawLuminousMoon(
+        context,
+        moonX,
+        weatherCelestialY(hour, height, true),
+        radius * 1.28,
+        moonAltitude(hour),
+        moonPhase,
+        config.mood.bodyDim,
+      );
     }
   }
 
+  // Cloud deck, weather veil, fog banks, horizon glow
+  scene.drawOver(context, config, frameCount);
+
+  const wind = ambientWindAt(frameCount) * config.mood.windStrength;
   for (let index = particles.length - 1; index >= 0; index -= 1) {
     const particle = particles[index]!;
     particle.life += frameScale;
@@ -143,10 +144,31 @@ function drawFrame(now: number, advanceSimulation = true) {
       particle.x += Math.sin(particle.wobble) * 0.8 * frameScale;
       particle.y += Math.cos(particle.wobble * 0.7) * 0.4 * frameScale;
     }
+    const windResponse = WIND_RESPONSE[particle.type];
+    if (windResponse) particle.x += wind * windResponse * frameScale;
     drawWeatherParticle(context, particle);
     const outside = particle.y > height + 20 || particle.y < -20 || particle.x > width + 20 || particle.x < -20;
     if (outside || particle.life > particle.maxLife) {
       particles[index] = createWeatherParticle(particle.type, width, height, true);
+    }
+  }
+
+  // Lightning flash (epilepsy-safe: capped alpha, gentle decay, long gap between flashes)
+  if (config.lightning) {
+    if (frameCount >= nextLightning) {
+      lightningAlpha = 0.45 + Math.random() * 0.15;
+      nextLightning = frameCount + 400 + Math.random() * 800;
+      lightningStrike = createLightningStrike(width, height);
+      boltAlpha = 1;
+    }
+    if (lightningAlpha > 0 && lightningStrike) {
+      drawLightningFlash(context, lightningStrike, lightningAlpha, width, height);
+      if (boltAlpha > 0) {
+        drawLightningBolt(context, lightningStrike, boltAlpha);
+        boltAlpha -= frameScale / 8;
+      }
+      lightningAlpha *= Math.pow(0.88, frameScale);
+      if (lightningAlpha < 0.01) lightningAlpha = 0;
     }
   }
 }
@@ -183,8 +205,11 @@ self.onmessage = (event: MessageEvent<WeatherWorkerMessage>) => {
     canvas = message.canvas;
     context = canvas.getContext("2d");
     config = message.config;
+    moonPhase = message.moonPhase;
     showCelestial = message.showCelestial;
     nextLightning = config.lightning ? 200 + Math.random() * 400 : Infinity;
+    lightningStrike = null;
+    boltAlpha = 0;
     resizeSurface(message.width, message.height, message.scale);
     populateParticles();
     drawFrame(performance.now());
