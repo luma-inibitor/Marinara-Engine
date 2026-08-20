@@ -42,6 +42,12 @@ export interface WeatherRenderConfig {
   sunRays: boolean;
   sunsetGlow: boolean;
   isClearSky: boolean;
+  /** Weather-family mood driving the ambient scene layers. */
+  mood: WeatherSceneMood;
+  /** Effective hour for scene passes; -1 when the time string gave nothing. */
+  sceneHour: number;
+  /** True when any ambient scene pass has something to draw. */
+  sceneActive: boolean;
 }
 
 // ── Map weather string → effect config ──
@@ -261,7 +267,17 @@ export function resolveWeatherRenderConfig(weather?: string | null, timeOfDay?: 
     !weather ||
     /clear|sunny|bright/i.test(weather) ||
     !/(rain|storm|snow|blizzard|fog|mist|haze|hail|sand|ash|smoke|overcast|cloud|grey|gray)/i.test(weather);
-  return { ...weatherConfig, ...timeConfig, isClearSky };
+  const mood = deriveWeatherMood(weather, weatherConfig.type, weatherConfig.lightning);
+  const sceneHour =
+    timeConfig.hour >= 0
+      ? timeConfig.hour
+      : timeConfig.celestial === "moon"
+        ? 0
+        : timeConfig.celestial === "sun"
+          ? 12
+          : -1;
+  const sceneActive = sceneHour >= 0 || mood.cloudiness > 0.12 || mood.veil !== null;
+  return { ...weatherConfig, ...timeConfig, isClearSky, mood, sceneHour, sceneActive };
 }
 
 // ── Create particle ──
@@ -547,7 +563,7 @@ export function drawWeatherParticle(ctx: WeatherCanvasContext, p: WeatherParticl
   ctx.globalAlpha = 1;
 }
 
-// ── Celestial drawing helpers ──
+// ── Celestial arc helpers ──
 
 /** Get sun/moon X position based on hour. Maps 6:00→left edge, 12:00→center, 18:00→right edge. */
 export function weatherCelestialX(hour: number, w: number): number {
@@ -560,7 +576,7 @@ export function weatherCelestialX(hour: number, w: number): number {
 export function weatherCelestialY(hour: number, h: number, isMoon: boolean): number {
   if (isMoon) {
     // Moon arc: highest at midnight (hour 0/24), lower at 21h and 5h
-    const t = hour >= 12 ? (hour - 21) / 7 : (hour + 3) / 7; // normalized 0-1
+    const t = hour >= 12 ? (hour - 21) / 7 : (hour + 3) / 7;
     const arc = Math.sin(Math.max(0, Math.min(1, t)) * Math.PI);
     return h * 0.05 + (1 - arc) * h * 0.2;
   }
@@ -570,126 +586,911 @@ export function weatherCelestialY(hour: number, h: number, isMoon: boolean): num
   return h * 0.05 + (1 - arc) * h * 0.25; // 5%-30% from top
 }
 
-export function drawWeatherSun(
+// ── Ambient scene ──
+// Keyframed sky wash, weather moods, seeded night scenery, and the luminous
+// celestial bodies. Shared by the main-thread fallback in WeatherEffects.tsx
+// and weather-effects.worker.ts, so nothing below may assume a window exists:
+// scratch canvases come from createScratchCanvas().
+
+type RGB = [number, number, number];
+
+const TAU = Math.PI * 2;
+const clamp01 = (value: number) => (value < 0 ? 0 : value > 1 ? 1 : value);
+const lerpValue = (from: number, to: number, t: number) => from + (to - from) * t;
+const lerpRGB = (from: RGB, to: RGB, t: number): RGB => [
+  lerpValue(from[0], to[0], t),
+  lerpValue(from[1], to[1], t),
+  lerpValue(from[2], to[2], t),
+];
+const rgb = (color: RGB, alpha: number) => `rgba(${color[0] | 0},${color[1] | 0},${color[2] | 0},${alpha})`;
+const smoothstep = (t: number) => t * t * (3 - 2 * t);
+
+/** Deterministic PRNG so seeded scenery is identical across resizes and render paths. */
+function mulberry32(seed: number) {
+  return function next() {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type ScratchCanvas = HTMLCanvasElement | OffscreenCanvas;
+
+function createScratchCanvas(width: number, height: number): ScratchCanvas {
+  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function scratchContext(canvas: ScratchCanvas): WeatherCanvasContext | null {
+  return canvas.getContext("2d") as WeatherCanvasContext | null;
+}
+
+// ── Sky palette: hour keyframes for top / mid / horizon plus the ambient light
+//    color that tints clouds, fog, and particles. Alpha is applied at draw time
+//    so the wash stays a tint over the user's background, never a paint-over. ──
+const SKY_KEYFRAMES: ReadonlyArray<readonly [number, RGB, RGB, RGB, RGB]> = [
+  [0.0, [4, 6, 15], [10, 16, 36], [16, 26, 53], [142, 160, 200]],
+  [4.6, [6, 10, 28], [16, 23, 54], [29, 37, 71], [147, 163, 204]],
+  [5.6, [19, 27, 61], [44, 47, 94], [124, 74, 95], [217, 160, 143]],
+  [6.4, [38, 64, 110], [111, 99, 146], [255, 157, 111], [255, 192, 154]],
+  [7.5, [58, 106, 168], [127, 165, 207], [255, 217, 168], [255, 228, 189]],
+  [9.5, [59, 121, 194], [141, 184, 224], [216, 236, 244], [255, 243, 221]],
+  [12.5, [47, 108, 191], [127, 176, 221], [201, 228, 239], [255, 248, 234]],
+  [15.5, [54, 111, 184], [133, 174, 214], [214, 230, 232], [255, 240, 210]],
+  [17.3, [64, 99, 159], [143, 135, 174], [255, 192, 122], [255, 217, 160]],
+  [18.3, [59, 63, 119], [129, 93, 132], [255, 143, 94], [255, 178, 126]],
+  [19.2, [32, 31, 75], [74, 58, 107], [201, 106, 99], [229, 154, 134]],
+  [20.2, [11, 16, 38], [28, 32, 68], [58, 53, 96], [169, 169, 214]],
+  [24.0, [4, 6, 15], [10, 16, 36], [16, 26, 53], [142, 160, 200]],
+];
+
+export interface SkyPalette {
+  top: RGB;
+  mid: RGB;
+  horizon: RGB;
+  light: RGB;
+}
+
+export function sampleSkyPalette(hour: number): SkyPalette {
+  const t = ((hour % 24) + 24) % 24;
+  let index = 0;
+  while (SKY_KEYFRAMES[index + 1]![0] < t) index += 1;
+  const from = SKY_KEYFRAMES[index]!;
+  const to = SKY_KEYFRAMES[index + 1]!;
+  const f = smoothstep((t - from[0]) / (to[0] - from[0]));
+  return {
+    top: lerpRGB(from[1], to[1], f),
+    mid: lerpRGB(from[2], to[2], f),
+    horizon: lerpRGB(from[3], to[3], f),
+    light: lerpRGB(from[4], to[4], f),
+  };
+}
+
+/** Signed sun elevation, −1..1: negative at night, 1 at noon. */
+export function sunElevation(hour: number): number {
+  return Math.sin(((hour - 6) / 12) * Math.PI);
+}
+
+/** Moon altitude 0..1 along its 21h→5h arc, peaking at midnight. */
+export function moonAltitude(hour: number): number {
+  const t = hour >= 12 ? (hour - 21) / 7 : (hour + 3) / 7;
+  return Math.sin(clamp01(t) * Math.PI);
+}
+
+// ── Weather mood: how a weather family dims bodies, occludes stars, drives the
+//    cloud deck and wind, and which translucent veil sets the tone. ──
+export interface WeatherSceneMood {
+  cloudiness: number;
+  /** How stormy-dark the cloud deck renders, 0..1. */
+  shade: number;
+  windStrength: number;
+  starIntensity: number;
+  /** Full-frame translucent wash, or null for none. Alpha stays ≤ 0.3. */
+  veil: [number, number, number, number] | null;
+  fogBanks: boolean;
+  /** Celestial body strength: 1 in the clear, dimmed toward 0 under weather. */
+  bodyDim: number;
+}
+
+const CLEAR_MOOD: WeatherSceneMood = {
+  cloudiness: 0.1,
+  shade: 0.05,
+  windStrength: 0.16,
+  starIntensity: 1,
+  veil: null,
+  fogBanks: false,
+  bodyDim: 1,
+};
+
+function deriveWeatherMood(
+  weather: string | null | undefined,
+  type: WeatherParticle["type"],
+  lightning: boolean,
+): WeatherSceneMood {
+  if (!weather) return CLEAR_MOOD;
+  if (lightning) {
+    return {
+      cloudiness: 1,
+      shade: 0.58,
+      windStrength: 1,
+      starIntensity: 0.05,
+      veil: [34, 40, 52, 0.3],
+      fogBanks: false,
+      bodyDim: 0.32,
+    };
+  }
+  switch (type) {
+    case "rain":
+      return {
+        cloudiness: 0.9,
+        shade: 0.42,
+        windStrength: 0.55,
+        starIntensity: 0.1,
+        veil: [66, 76, 90, 0.2],
+        fogBanks: false,
+        bodyDim: 0.42,
+      };
+    case "hail":
+    case "snow":
+      return {
+        cloudiness: 0.72,
+        shade: 0.16,
+        windStrength: 0.34,
+        starIntensity: 0.15,
+        veil: [210, 218, 228, 0.12],
+        fogBanks: false,
+        bodyDim: 0.48,
+      };
+    case "fog":
+      return {
+        cloudiness: 0.3,
+        shade: 0.18,
+        windStrength: 0.1,
+        starIntensity: 0.12,
+        veil: [224, 228, 236, 0.22],
+        fogBanks: true,
+        bodyDim: 0.38,
+      };
+    case "sand":
+      return {
+        cloudiness: 0.55,
+        shade: 0.34,
+        windStrength: 0.9,
+        starIntensity: 0.05,
+        veil: [180, 150, 100, 0.16],
+        fogBanks: false,
+        bodyDim: 0.4,
+      };
+    case "ash":
+      return {
+        cloudiness: 0.5,
+        shade: 0.4,
+        windStrength: 0.3,
+        starIntensity: 0.1,
+        veil: [80, 66, 66, 0.16],
+        fogBanks: false,
+        bodyDim: 0.45,
+      };
+    case "ember":
+      return { ...CLEAR_MOOD, windStrength: 0.3, starIntensity: 0.6, veil: [120, 40, 10, 0.06], bodyDim: 0.8 };
+    case "leaf":
+      return { ...CLEAR_MOOD, windStrength: 0.85 };
+    case "petal":
+      return { ...CLEAR_MOOD, windStrength: 0.4 };
+    default:
+      break;
+  }
+  const normalized = weather.toLowerCase();
+  if (normalized.includes("overcast")) {
+    return {
+      cloudiness: 1,
+      shade: 0.14,
+      windStrength: 0.3,
+      starIntensity: 0.2,
+      veil: [118, 126, 140, 0.14],
+      fogBanks: false,
+      bodyDim: 0.55,
+    };
+  }
+  if (/(cloud|grey|gray)/.test(normalized)) {
+    return {
+      cloudiness: 0.8,
+      shade: 0.14,
+      windStrength: 0.3,
+      starIntensity: 0.3,
+      veil: [118, 126, 140, 0.1],
+      fogBanks: false,
+      bodyDim: 0.6,
+    };
+  }
+  return CLEAR_MOOD;
+}
+
+// ── Moon phase from the tracker's free-text date ──
+const SYNODIC_MONTH = 29.530588;
+const DEFAULT_MOON_PHASE = 0.22;
+const MONTH_STEMS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+function wrapPhase(days: number): number {
+  return (((days % SYNODIC_MONTH) + SYNODIC_MONTH) % SYNODIC_MONTH) / SYNODIC_MONTH;
+}
+
+/**
+ * Derive a lunar phase (0 new → 0.5 full → 1 new) from the world tracker's
+ * free-text date. Campaign day counters and calendar dates progress the moon
+ * night over night; anything unparseable gets a stable per-string phase so the
+ * moon never jumps while the date text is unchanged.
+ */
+export function deriveMoonPhase(dateText?: string | null): number {
+  const text = dateText?.trim().toLowerCase() ?? "";
+  if (!text) return DEFAULT_MOON_PHASE;
+  const dayCounter = text.match(/\bday\s+(\d{1,6})\b/);
+  if (dayCounter) return wrapPhase(parseInt(dayCounter[1]!, 10) - 1);
+  const iso = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) {
+    return wrapPhase(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])) / 86_400_000);
+  }
+  const dayOfMonth = text.match(/\b(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (dayOfMonth) {
+    const monthIndex = MONTH_STEMS.findIndex((stem) => text.includes(stem));
+    return wrapPhase((monthIndex >= 0 ? monthIndex * 30.44 : 0) + parseInt(dayOfMonth[1]!, 10));
+  }
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) hash = (hash * 31 + text.charCodeAt(index)) | 0;
+  return (((hash % 1000) + 1000) % 1000) / 1000;
+}
+
+// ── Wind: one shared low-frequency field so drifting particles surge and lull
+//    together instead of falling at a constant rate. ──
+export function ambientWindAt(frame: number): number {
+  return 0.58 * Math.sin(frame * 0.0031) + 0.29 * Math.sin(frame * 0.0087 + 1.7) + 0.14 * Math.sin(frame * 0.019 + 4.1);
+}
+
+export const WIND_RESPONSE: Partial<Record<WeatherParticle["type"], number>> = {
+  snow: 2.2,
+  leaf: 2.6,
+  petal: 2.4,
+  ash: 1.8,
+  ember: 1.4,
+  sand: 1.2,
+  dust: 1,
+  fog: 0.7,
+  rain: 0.5,
+  hail: 0.3,
+};
+
+// ── Luminous celestial bodies ──
+// Opaque core wearing an alpha-composited glow: additive light vanishes over a
+// light chat background, an alpha veil tints it, and the solid core means the
+// body never dissolves regardless of what the user put behind the chat.
+
+/** A soft anisotropic glow: a radial gradient stretched along one axis. */
+function softLozenge(
+  ctx: WeatherCanvasContext,
+  x: number,
+  y: number,
+  length: number,
+  width: number,
+  color: RGB,
+  alpha: number,
+) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(length, width);
+  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+  gradient.addColorStop(0, rgb(color, alpha));
+  gradient.addColorStop(0.35, rgb(color, alpha * 0.4));
+  gradient.addColorStop(0.7, rgb(color, alpha * 0.1));
+  gradient.addColorStop(1, rgb(color, 0));
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(0, 0, 1, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+export function drawLuminousSun(
   ctx: WeatherCanvasContext,
   x: number,
   y: number,
   radius: number,
-  w: number,
-  h: number,
-  sunRays: boolean,
-  sunsetGlow: boolean,
-  frameCount: number,
+  elevation: number,
+  frame: number,
+  dim: number,
 ) {
+  if (dim <= 0.02) return;
+  const t = clamp01(1 - Math.max(0, elevation) * 2.2);
+  const core = lerpRGB([255, 252, 242], [255, 216, 150], Math.min(1, t * 1.15));
+  const mid = lerpRGB([255, 236, 186], [255, 146, 70], t);
+  const edge = lerpRGB([255, 200, 116], [240, 92, 40], t);
+  const breathe = 0.93 + Math.sin(frame * 0.005) * 0.07;
+  const k = dim * breathe;
   ctx.save();
 
-  if (sunsetGlow) {
-    // Warm gradient sky wash at bottom
-    const glowGrad = ctx.createRadialGradient(x, y, radius, x, y + radius * 6, radius * 12);
-    glowGrad.addColorStop(0, "rgba(255,140,50,0.12)");
-    glowGrad.addColorStop(0.4, "rgba(255,80,30,0.06)");
-    glowGrad.addColorStop(1, "rgba(255,40,20,0)");
-    ctx.fillStyle = glowGrad;
-    ctx.fillRect(0, 0, w, h);
-  }
-
-  // Outer glow
-  const outerGlow = ctx.createRadialGradient(x, y, radius * 0.5, x, y, radius * 4);
-  outerGlow.addColorStop(0, sunsetGlow ? "rgba(255,120,40,0.15)" : "rgba(255,240,180,0.12)");
-  outerGlow.addColorStop(0.5, sunsetGlow ? "rgba(255,80,20,0.05)" : "rgba(255,240,180,0.04)");
-  outerGlow.addColorStop(1, "rgba(255,240,180,0)");
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = outerGlow;
+  const veil = ctx.createRadialGradient(x, y, radius * 0.6, x, y, radius * 8);
+  veil.addColorStop(0, rgb(edge, 0.26 * k));
+  veil.addColorStop(0.12, rgb(edge, 0.14 * k));
+  veil.addColorStop(0.35, rgb(edge, 0.05 * k));
+  veil.addColorStop(0.7, rgb(edge, 0.014 * k));
+  veil.addColorStop(1, rgb(edge, 0));
+  ctx.fillStyle = veil;
   ctx.beginPath();
-  ctx.arc(x, y, radius * 4, 0, Math.PI * 2);
+  ctx.arc(x, y, radius * 8, 0, TAU);
   ctx.fill();
 
-  // Sun disc
-  const discGrad = ctx.createRadialGradient(x, y, 0, x, y, radius);
-  if (sunsetGlow) {
-    discGrad.addColorStop(0, "rgba(255,200,100,0.9)");
-    discGrad.addColorStop(0.7, "rgba(255,120,40,0.7)");
-    discGrad.addColorStop(1, "rgba(255,80,20,0.3)");
-  } else {
-    discGrad.addColorStop(0, "rgba(255,250,220,0.8)");
-    discGrad.addColorStop(0.7, "rgba(255,240,180,0.5)");
-    discGrad.addColorStop(1, "rgba(255,230,150,0.2)");
-  }
-  ctx.globalAlpha = 0.8;
-  ctx.fillStyle = discGrad;
+  const bloom = ctx.createRadialGradient(x, y, 0, x, y, radius * 2.7);
+  bloom.addColorStop(0, rgb(core, 0.8 * k));
+  bloom.addColorStop(0.36, rgb(mid, 0.3 * k));
+  bloom.addColorStop(0.7, rgb(mid, 0.085 * k));
+  bloom.addColorStop(1, rgb(mid, 0));
+  ctx.fillStyle = bloom;
   ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.arc(x, y, radius * 2.7, 0, TAU);
   ctx.fill();
 
-  // Animated light rays
-  if (sunRays) {
-    const rayCount = 12;
-    const rotOffset = frameCount * 0.002;
-    ctx.globalAlpha = 0.06;
-    for (let i = 0; i < rayCount; i++) {
-      const angle = (i / rayCount) * Math.PI * 2 + rotOffset;
-      const pulse = 0.8 + Math.sin(frameCount * 0.01 + i * 1.5) * 0.2;
-      const rayLen = radius * (3.5 + pulse * 2);
-      const spread = 0.08;
-      ctx.fillStyle = sunsetGlow ? "rgba(255,160,60,0.5)" : "rgba(255,250,200,0.4)";
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + Math.cos(angle - spread) * rayLen, y + Math.sin(angle - spread) * rayLen);
-      ctx.lineTo(x + Math.cos(angle + spread) * rayLen, y + Math.sin(angle + spread) * rayLen);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }
+  softLozenge(ctx, x, y, radius * 7.2, radius * 0.4, core, 0.16 * k);
+  softLozenge(ctx, x, y, radius * 0.38, radius * 4.2, core, 0.085 * k);
+
+  // Refraction flattening only in the last 12% of altitude — a round sun
+  // everywhere the eye would call an oval a bug.
+  const flattening = clamp01((0.12 - elevation) / 0.12);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(1, 1 - 0.08 * flattening * flattening);
+  ctx.translate(-x, -y);
+  const disc = ctx.createRadialGradient(x, y, 0, x, y, radius);
+  disc.addColorStop(0, rgb(core, dim));
+  disc.addColorStop(0.62, rgb(core, dim));
+  disc.addColorStop(0.88, rgb(mid, 0.98 * dim));
+  disc.addColorStop(0.965, rgb(edge, 0.9 * dim));
+  disc.addColorStop(1, rgb(edge, 0));
+  ctx.fillStyle = disc;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+
+  const fringe = ctx.createRadialGradient(x, y, radius * 0.97, x, y, radius * 1.24);
+  fringe.addColorStop(0, rgb(edge, 0.26 * k));
+  fringe.addColorStop(1, rgb(edge, 0));
+  ctx.fillStyle = fringe;
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 1.24, 0, TAU);
+  ctx.fill();
 
   ctx.restore();
 }
 
-export function drawWeatherMoon(ctx: WeatherCanvasContext, x: number, y: number, radius: number, _frameCount: number) {
+/** Lunar maria as soft merging patches, in units of the moon radius. */
+const LUNAR_MARIA: ReadonlyArray<{ x: number; y: number; r: number; squash: number; alpha: number }> = [
+  { x: -0.28, y: -0.36, r: 0.42, squash: 0.72, alpha: 0.22 },
+  { x: 0.08, y: -0.46, r: 0.3, squash: 0.88, alpha: 0.15 },
+  { x: -0.47, y: 0.04, r: 0.36, squash: 1.3, alpha: 0.19 },
+  { x: -0.05, y: 0.02, r: 0.48, squash: 0.86, alpha: 0.16 },
+  { x: 0.32, y: 0.33, r: 0.26, squash: 1.05, alpha: 0.11 },
+  { x: -0.14, y: 0.5, r: 0.28, squash: 0.78, alpha: 0.09 },
+];
+
+export function drawLuminousMoon(
+  ctx: WeatherCanvasContext,
+  x: number,
+  y: number,
+  radius: number,
+  altitude: number,
+  phase: number,
+  dim: number,
+) {
+  if (dim <= 0.02) return;
+  const t = clamp01(1 - altitude * 1.8);
+  const lit = lerpRGB([244, 247, 254], [253, 220, 168], t);
+  const litLow = lerpRGB([206, 216, 240], [233, 162, 102], t);
+  const halo = lerpRGB([190, 208, 250], [248, 184, 120], t);
+
+  const angle = phase * TAU;
+  const illum = (1 - Math.cos(angle)) / 2;
+  const terminatorX = radius * Math.cos(angle);
+  const waxing = phase < 0.5;
+  const side = waxing ? 1 : -1;
+
+  let litPath: Path2D | null = null;
+  if (illum > 0.015) {
+    litPath = new Path2D();
+    if (waxing) {
+      litPath.arc(x, y, radius, -Math.PI / 2, Math.PI / 2, false);
+      litPath.ellipse(x, y, Math.abs(terminatorX), radius, 0, Math.PI / 2, -Math.PI / 2, terminatorX > 0);
+    } else {
+      litPath.arc(x, y, radius, Math.PI / 2, -Math.PI / 2, false);
+      litPath.ellipse(x, y, Math.abs(terminatorX), radius, 0, -Math.PI / 2, Math.PI / 2, terminatorX > 0);
+    }
+    litPath.closePath();
+  }
+
   ctx.save();
 
-  // Soft moonlight glow
-  const glow = ctx.createRadialGradient(x, y, radius * 0.5, x, y, radius * 5);
-  glow.addColorStop(0, "rgba(180,200,255,0.10)");
-  glow.addColorStop(0.4, "rgba(150,180,255,0.04)");
-  glow.addColorStop(1, "rgba(150,180,255,0)");
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = glow;
+  // Body first — the halo is atmosphere in front of the moon, so it goes on
+  // top afterwards. Glow-behind lets the dark limb occlude its own halo and
+  // reads as a grey balloon.
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(x, y, radius * 5, 0, Math.PI * 2);
+  ctx.arc(x, y, radius, 0, TAU);
+  ctx.clip();
+  const earthshine = ctx.createRadialGradient(x - radius * 0.25, y - radius * 0.25, 0, x, y, radius);
+  earthshine.addColorStop(0, rgb(lerpRGB([58, 68, 98], [82, 68, 80], t), 0.14 * dim));
+  earthshine.addColorStop(1, rgb([34, 40, 62], 0.09 * dim));
+  ctx.fillStyle = earthshine;
+  ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  if (litPath) {
+    // Near full there is no terminator on the visible face — lift the floor so
+    // the far limb doesn't fall back to earthshine as a phantom dark crescent.
+    const floorAlpha = 0.06 + 0.92 * clamp01((illum - 0.55) / 0.4);
+    const terminator = ctx.createLinearGradient(x + side * terminatorX, y, x + side * radius, y);
+    terminator.addColorStop(0, rgb(litLow, floorAlpha * dim));
+    terminator.addColorStop(0.09, rgb(litLow, Math.max(0.5, floorAlpha) * dim));
+    terminator.addColorStop(0.3, rgb(lit, 0.94 * dim));
+    terminator.addColorStop(1, rgb(lit, dim));
+    ctx.fillStyle = terminator;
+    ctx.fill(litPath);
+    ctx.save();
+    ctx.clip(litPath);
+    for (const sea of LUNAR_MARIA) {
+      ctx.save();
+      ctx.translate(x + sea.x * radius, y + sea.y * radius);
+      ctx.scale(1, sea.squash);
+      const patch = ctx.createRadialGradient(0, 0, 0, 0, 0, sea.r * radius);
+      patch.addColorStop(0, `rgba(48,56,80,${sea.alpha * 0.85 * dim})`);
+      patch.addColorStop(0.55, `rgba(48,56,80,${sea.alpha * 0.53 * dim})`);
+      patch.addColorStop(1, "rgba(48,56,80,0)");
+      ctx.fillStyle = patch;
+      ctx.beginPath();
+      ctx.arc(0, 0, sea.r * radius, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  const limb = ctx.createRadialGradient(x, y, radius * 0.62, x, y, radius);
+  limb.addColorStop(0, "rgba(20,26,44,0)");
+  limb.addColorStop(1, `rgba(20,26,44,${0.26 * dim})`);
+  ctx.fillStyle = limb;
+  ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  ctx.restore();
+
+  // Glow rides the lit limb, over the disc.
+  const glowX = x + side * radius * 0.42 * (1 - illum);
+  const veilAlpha = (0.09 + 0.24 * illum) * dim;
+  const veil = ctx.createRadialGradient(glowX, y, radius * 0.7, glowX, y, radius * 5);
+  veil.addColorStop(0, rgb(halo, veilAlpha));
+  veil.addColorStop(0.25, rgb(halo, veilAlpha * 0.35));
+  veil.addColorStop(0.6, rgb(halo, veilAlpha * 0.09));
+  veil.addColorStop(1, rgb(halo, 0));
+  ctx.fillStyle = veil;
+  ctx.beginPath();
+  ctx.arc(glowX, y, radius * 5, 0, TAU);
   ctx.fill();
 
-  // Moon disc (bright side)
-  const discGrad = ctx.createRadialGradient(x - radius * 0.15, y - radius * 0.15, 0, x, y, radius);
-  discGrad.addColorStop(0, "rgba(230,235,255,0.85)");
-  discGrad.addColorStop(0.8, "rgba(200,210,240,0.6)");
-  discGrad.addColorStop(1, "rgba(180,190,220,0.3)");
-  ctx.globalAlpha = 0.7;
-  ctx.fillStyle = discGrad;
+  const bloom = ctx.createRadialGradient(glowX, y, 0, glowX, y, radius * 2.1);
+  bloom.addColorStop(0, rgb(lit, (0.2 + 0.22 * illum) * dim));
+  bloom.addColorStop(0.45, rgb(halo, (0.08 + 0.08 * illum) * dim));
+  bloom.addColorStop(1, rgb(halo, 0));
+  ctx.fillStyle = bloom;
   ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.arc(glowX, y, radius * 2.1, 0, TAU);
   ctx.fill();
 
-  // Crescent shadow (dark side) — offset circle to create crescent shape
-  ctx.globalCompositeOperation = "destination-out";
-  ctx.globalAlpha = 0.65;
-  ctx.fillStyle = "black";
-  ctx.beginPath();
-  ctx.arc(x + radius * 0.45, y - radius * 0.1, radius * 0.85, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalCompositeOperation = "source-over";
-
-  // Subtle crater hints
-  ctx.globalAlpha = 0.06;
-  ctx.fillStyle = "rgba(150,160,190,1)";
-  ctx.beginPath();
-  ctx.arc(x - radius * 0.25, y - radius * 0.15, radius * 0.12, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(x - radius * 0.4, y + radius * 0.25, radius * 0.08, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(x - radius * 0.05, y + radius * 0.35, radius * 0.1, 0, Math.PI * 2);
-  ctx.fill();
+  if (illum > 0.12) softLozenge(ctx, glowX, y, radius * 4, radius * 0.26, lit, (0.07 + 0.07 * illum) * dim);
 
   ctx.restore();
+}
+
+// ── Lightning: a directional strike instead of an even full-frame wash.
+//    The alpha ceiling, decay, and cadence are a safety property (epilepsy-
+//    safe) owned by the callers — these helpers only draw. ──
+export interface LightningStrike {
+  x: number;
+  y: number;
+  points: Array<[number, number]>;
+}
+
+export function createLightningStrike(width: number, height: number): LightningStrike {
+  const x = width * (0.15 + Math.random() * 0.7);
+  const y = height * (0.06 + Math.random() * 0.2);
+  let points: Array<[number, number]> = [
+    [x, 0],
+    [x + (Math.random() - 0.5) * width * 0.2, height * (0.55 + Math.random() * 0.25)],
+  ];
+  for (let pass = 0; pass < 5; pass += 1) {
+    const out: Array<[number, number]> = [points[0]!];
+    for (let index = 1; index < points.length; index += 1) {
+      const [ax, ay] = points[index - 1]!;
+      const [bx, by] = points[index]!;
+      out.push([(ax + bx) / 2 + (Math.random() - 0.5) * (by - ay) * 0.5, (ay + by) / 2 + (Math.random() - 0.5) * 18]);
+      out.push(points[index]!);
+    }
+    points = out;
+  }
+  return { x, y, points };
+}
+
+export function drawLightningFlash(
+  ctx: WeatherCanvasContext,
+  strike: LightningStrike,
+  alpha: number,
+  width: number,
+  height: number,
+) {
+  const flash = ctx.createRadialGradient(strike.x, strike.y, 0, strike.x, strike.y, Math.max(width, height) * 0.9);
+  flash.addColorStop(0, `rgba(225,232,255,${alpha})`);
+  flash.addColorStop(1, "rgba(225,232,255,0)");
+  ctx.fillStyle = flash;
+  ctx.fillRect(0, 0, width, height);
+}
+
+export function drawLightningBolt(ctx: WeatherCanvasContext, strike: LightningStrike, alpha: number) {
+  ctx.save();
+  ctx.strokeStyle = `rgba(235,240,255,${0.8 * alpha})`;
+  ctx.lineWidth = 1.4;
+  ctx.lineJoin = "round";
+  ctx.shadowColor = "rgba(190,205,255,0.9)";
+  ctx.shadowBlur = 14;
+  ctx.beginPath();
+  for (let index = 0; index < strike.points.length; index += 1) {
+    const [px, py] = strike.points[index]!;
+    if (index === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ── AmbientScene: the seeded scenery layers around tint, bodies, and particles.
+//    drawUnder() goes right after clearRect; drawOver() right after the body. ──
+
+interface CloudPuff {
+  x: number;
+  y: number;
+  size: number;
+  lobes: Array<{ dx: number; dy: number; scale: number }>;
+}
+
+interface CloudLayer {
+  puffs: CloudPuff[];
+  speed: number;
+  scale: number;
+}
+
+interface Twinkler {
+  x: number;
+  y: number;
+  r: number;
+  phase: number;
+  rate: number;
+}
+
+interface Meteor {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+}
+
+export class AmbientScene {
+  private width = 0;
+  private height = 0;
+  private starCanvas: ScratchCanvas | null = null;
+  private twinklers: Twinkler[] = [];
+  private meteor: Meteor | null = null;
+  private framesToMeteor = 900;
+  private blobSprite: ScratchCanvas | null = null;
+  private tintCanvas: ScratchCanvas | null = null;
+  private tintKey = "";
+  private auroraCanvas: ScratchCanvas | null = null;
+  private readonly cloudLayers: CloudLayer[];
+
+  constructor() {
+    const random = mulberry32(6021);
+    const layers: CloudLayer[] = [];
+    for (let layer = 0; layer < 3; layer += 1) {
+      const puffs: CloudPuff[] = [];
+      for (let index = 0; index < 7; index += 1) {
+        const lobes: CloudPuff["lobes"] = [];
+        const lobeCount = 4 + ((random() * 3) | 0);
+        for (let lobe = 0; lobe < lobeCount; lobe += 1) {
+          lobes.push({ dx: (random() - 0.5) * 2.4, dy: (random() - 0.5) * 0.6, scale: 0.55 + random() * 0.75 });
+        }
+        puffs.push({ x: random(), y: 0.08 + random() * 0.34 + layer * 0.08, size: 0.1 + random() * 0.1, lobes });
+      }
+      layers.push({ puffs, speed: 0.0044 - 0.0013 * layer, scale: 1 - 0.22 * layer });
+    }
+    this.cloudLayers = layers;
+  }
+
+  resize(width: number, height: number) {
+    this.width = Math.max(1, Math.round(width));
+    this.height = Math.max(1, Math.round(height));
+    this.buildStars();
+    this.auroraCanvas = createScratchCanvas(Math.ceil(this.width / 8), Math.ceil(this.height / 2));
+    if (!this.blobSprite) this.buildBlobSprite();
+  }
+
+  private buildBlobSprite() {
+    const size = 200;
+    const sprite = createScratchCanvas(size, size);
+    const ctx = scratchContext(sprite);
+    if (!ctx) return;
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, "rgba(255,255,255,0.9)");
+    gradient.addColorStop(0.45, "rgba(255,255,255,0.42)");
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+    this.blobSprite = sprite;
+    this.tintCanvas = createScratchCanvas(size, size);
+    this.tintKey = "";
+  }
+
+  private buildStars() {
+    const random = mulberry32(1379);
+    const { width, height } = this;
+    const canvas = createScratchCanvas(width, height);
+    const ctx = scratchContext(canvas);
+    if (!ctx) {
+      this.starCanvas = null;
+      return;
+    }
+    ctx.save();
+    ctx.translate(width * 0.5, height * 0.38);
+    ctx.rotate(-0.5);
+    const band = ctx.createLinearGradient(0, -height * 0.3, 0, height * 0.3);
+    band.addColorStop(0, "rgba(150,170,225,0)");
+    band.addColorStop(0.5, "rgba(168,186,235,0.08)");
+    band.addColorStop(1, "rgba(150,170,225,0)");
+    ctx.fillStyle = band;
+    ctx.fillRect(-width, -height * 0.3, width * 2, height * 0.6);
+    ctx.restore();
+    for (let index = 0; index < 240; index += 1) {
+      const x = random() * width;
+      const y = Math.pow(random(), 1.2) * height * 0.92;
+      const r = random() * 1.1 + 0.25;
+      const alpha = 0.25 + random() * 0.6;
+      const warm = random() < 0.18;
+      ctx.fillStyle = warm ? `rgba(255,222,190,${alpha})` : `rgba(222,232,255,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fill();
+    }
+    this.starCanvas = canvas;
+    this.twinklers = [];
+    for (let index = 0; index < 22; index += 1) {
+      this.twinklers.push({
+        x: random() * width,
+        y: Math.pow(random(), 1.25) * height * 0.85,
+        r: 0.9 + random() * 1.3,
+        phase: random() * TAU,
+        rate: 0.5 + random(),
+      });
+    }
+  }
+
+  private tintedBlob(color: RGB): ScratchCanvas | null {
+    if (!this.blobSprite || !this.tintCanvas) return null;
+    const key = `${color[0] | 0},${color[1] | 0},${color[2] | 0}`;
+    if (key !== this.tintKey) {
+      const ctx = scratchContext(this.tintCanvas);
+      if (!ctx) return null;
+      ctx.clearRect(0, 0, 200, 200);
+      ctx.globalCompositeOperation = "source-over";
+      ctx.drawImage(this.blobSprite, 0, 0);
+      ctx.globalCompositeOperation = "source-in";
+      ctx.fillStyle = rgb(color, 1);
+      ctx.fillRect(0, 0, 200, 200);
+      ctx.globalCompositeOperation = "source-over";
+      this.tintKey = key;
+    }
+    return this.tintCanvas;
+  }
+
+  private starAlpha(config: WeatherRenderConfig): number {
+    if (config.sceneHour < 0) return 0;
+    return clamp01((-sunElevation(config.sceneHour) - 0.02) / 0.28) * config.mood.starIntensity;
+  }
+
+  /** Sky wash, star field, meteors, and aurora — right after clearRect. */
+  drawUnder(ctx: WeatherCanvasContext, config: WeatherRenderConfig, frame: number, frameScale: number) {
+    const { width, height } = this;
+    const hour = config.sceneHour;
+    if (hour < 0) return;
+    const palette = sampleSkyPalette(hour);
+    const nightness = clamp01((1 - sunElevation(hour)) / 2);
+    const alphaTop = 0.14 + 0.28 * nightness;
+    const wash = ctx.createLinearGradient(0, 0, 0, height);
+    wash.addColorStop(0, rgb(palette.top, alphaTop));
+    wash.addColorStop(0.55, rgb(palette.mid, alphaTop * 0.8));
+    wash.addColorStop(1, rgb(palette.horizon, alphaTop * 0.55));
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, width, height);
+
+    const stars = this.starAlpha(config);
+    if (stars > 0.01 && this.starCanvas) {
+      ctx.globalAlpha = stars;
+      ctx.drawImage(this.starCanvas, 0, 0);
+      ctx.globalAlpha = 1;
+      for (const star of this.twinklers) {
+        const alpha = stars * (0.35 + 0.65 * Math.abs(Math.sin(star.phase + frame * 0.04 * star.rate)));
+        ctx.fillStyle = `rgba(230,238,255,${alpha})`;
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.r, 0, TAU);
+        ctx.fill();
+      }
+      if (frameScale > 0 && !config.lightning) this.stepMeteor(ctx, frameScale, stars);
+    }
+    if (config.type === "aurora" && stars > 0.02) this.drawAurora(ctx, frame, stars);
+  }
+
+  private stepMeteor(ctx: WeatherCanvasContext, frameScale: number, starAlpha: number) {
+    if (!this.meteor) {
+      this.framesToMeteor -= frameScale;
+      if (this.framesToMeteor <= 0 && starAlpha > 0.6) {
+        this.meteor = {
+          x: this.width * (0.15 + Math.random() * 0.7),
+          y: this.height * (0.05 + Math.random() * 0.25),
+          vx: (Math.random() < 0.5 ? -1 : 1) * (9 + Math.random() * 5),
+          vy: 4 + Math.random() * 3,
+          life: 1,
+        };
+        this.framesToMeteor = 550 + Math.random() * 850;
+      }
+      return;
+    }
+    const meteor = this.meteor;
+    meteor.life -= frameScale / 42;
+    meteor.x += meteor.vx * frameScale;
+    meteor.y += meteor.vy * frameScale;
+    if (meteor.life <= 0) {
+      this.meteor = null;
+      return;
+    }
+    const trail = ctx.createLinearGradient(meteor.x, meteor.y, meteor.x - meteor.vx * 8, meteor.y - meteor.vy * 8);
+    trail.addColorStop(0, `rgba(255,255,255,${0.9 * meteor.life * starAlpha})`);
+    trail.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.strokeStyle = trail;
+    ctx.lineWidth = 1.4;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(meteor.x, meteor.y);
+    ctx.lineTo(meteor.x - meteor.vx * 8, meteor.y - meteor.vy * 8);
+    ctx.stroke();
+  }
+
+  /** Aurora curtains rendered low-res and blitted stretched, as silk. */
+  private drawAurora(ctx: WeatherCanvasContext, frame: number, starAlpha: number) {
+    if (!this.auroraCanvas) return;
+    const auroraCtx = scratchContext(this.auroraCanvas);
+    if (!auroraCtx) return;
+    const { width, height } = this;
+    const GREEN: RGB = [70, 235, 165];
+    const TEAL: RGB = [80, 200, 235];
+    const VIOLET: RGB = [172, 110, 240];
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const backdrop = ctx.createLinearGradient(0, height * 0.03, 0, height * 0.55);
+    backdrop.addColorStop(0, rgb(VIOLET, 0.035 * starAlpha));
+    backdrop.addColorStop(0.6, rgb(GREEN, 0.05 * starAlpha));
+    backdrop.addColorStop(1, rgb(GREEN, 0));
+    ctx.fillStyle = backdrop;
+    ctx.fillRect(0, height * 0.03, width, height * 0.52);
+
+    const auroraWidth = this.auroraCanvas.width;
+    const auroraHeight = this.auroraCanvas.height;
+    const yScale = auroraHeight / height;
+    auroraCtx.clearRect(0, 0, auroraWidth, auroraHeight);
+    for (let band = 0; band < 2; band += 1) {
+      const sway = band ? 1.6 : 1;
+      const offset = band * 2.7;
+      for (let column = 0; column < auroraWidth; column += 1) {
+        const x = column * 8;
+        const hem =
+          (height * (0.36 + band * 0.1) +
+            Math.sin(x * 0.0011 + frame * 0.011 * sway + offset) * height * 0.085 +
+            Math.sin(x * 0.0034 - frame * 0.006 + offset * 1.7) * height * 0.038) *
+          yScale;
+        const length =
+          height * (0.3 + band * 0.07) * (0.55 + 0.45 * Math.sin(x * 0.0021 + frame * 0.008 + offset)) * yScale;
+        const shimmer =
+          0.42 +
+          0.42 * Math.sin(x * 0.012 + frame * 0.05 + offset * 3) +
+          0.26 * Math.sin(x * 0.031 - frame * 0.032 + offset);
+        const alpha = Math.max(0, shimmer) * (band ? 0.26 : 0.42) * starAlpha;
+        if (alpha < 0.004) continue;
+        const hue = 0.5 + 0.5 * Math.sin(x * 0.0016 + frame * 0.004 + offset);
+        const low = lerpRGB(GREEN, TEAL, hue);
+        const high = lerpRGB(low, VIOLET, 0.75);
+        const curtain = auroraCtx.createLinearGradient(0, hem - length, 0, hem);
+        curtain.addColorStop(0, rgb(high, 0));
+        curtain.addColorStop(0.45, rgb(high, alpha * 0.38));
+        curtain.addColorStop(0.88, rgb(low, alpha));
+        curtain.addColorStop(1, rgb(low, alpha * 0.5));
+        auroraCtx.fillStyle = curtain;
+        auroraCtx.fillRect(column, hem - length, 1, length);
+      }
+    }
+    ctx.drawImage(this.auroraCanvas, 0, 0, width, height);
+    ctx.restore();
+  }
+
+  /** Cloud deck, weather veil, fog banks, and horizon glow — after the body. */
+  drawOver(ctx: WeatherCanvasContext, config: WeatherRenderConfig, frame: number) {
+    const { width, height } = this;
+    const mood = config.mood;
+    const hour = config.sceneHour;
+    const palette = hour >= 0 ? sampleSkyPalette(hour) : null;
+
+    if (mood.cloudiness > 0.02) {
+      const night = palette ? clamp01(this.starAlpha(config) * 1.2) : 0;
+      let cloudColor: RGB = palette
+        ? lerpRGB(lerpRGB([250, 250, 252], palette.light, 0.5), lerpRGB(palette.mid, [8, 10, 20], 0.3), night)
+        : [150, 155, 168];
+      cloudColor = lerpRGB(cloudColor, [42, 48, 60], mood.shade);
+      const sprite = this.tintedBlob(cloudColor);
+      if (sprite) {
+        const drift = 0.4 + mood.windStrength * 0.6;
+        for (let index = 0; index < this.cloudLayers.length; index += 1) {
+          const layer = this.cloudLayers[index]!;
+          const alpha = mood.cloudiness * (0.2 - index * 0.045) * (1 + mood.shade * 0.9) * (1 - 0.45 * night);
+          if (alpha <= 0.004) continue;
+          ctx.globalAlpha = alpha;
+          for (const puff of layer.puffs) {
+            const px = (((puff.x + frame * layer.speed * drift) % 1.3) - 0.15) * width;
+            for (const lobe of puff.lobes) {
+              const size = puff.size * lobe.scale * width * layer.scale;
+              ctx.drawImage(
+                sprite,
+                px + lobe.dx * puff.size * width * 0.5 - size / 2,
+                puff.y * height * 0.62 + lobe.dy * puff.size * width * 0.5 - size * 0.3,
+                size,
+                size * 0.6,
+              );
+            }
+          }
+          ctx.globalAlpha = 1;
+        }
+      }
+    }
+
+    if (mood.veil) {
+      const [r, g, b, a] = mood.veil;
+      ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    if (mood.fogBanks) {
+      const fogColor = palette ? lerpRGB(palette.light, [236, 239, 244], 0.55) : ([232, 235, 241] as RGB);
+      for (let index = 0; index < 4; index += 1) {
+        const y = height * (0.45 + index * 0.16) + Math.sin(frame * 0.008 + index * 2.1) * 10;
+        const thickness = height * (0.09 + index * 0.02);
+        const bank = ctx.createLinearGradient(0, y - thickness, 0, y + thickness);
+        bank.addColorStop(0, rgb(fogColor, 0));
+        bank.addColorStop(0.5, rgb(fogColor, 0.13 + 0.03 * index));
+        bank.addColorStop(1, rgb(fogColor, 0));
+        ctx.fillStyle = bank;
+        ctx.fillRect(0, y - thickness, width, thickness * 2);
+      }
+    }
+
+    if (palette && hour >= 0 && mood.shade < 0.5) {
+      const near = 1 - Math.min(1, Math.abs(sunElevation(hour)) * 2.4);
+      if (near > 0.01) {
+        const glow = ctx.createLinearGradient(0, height * 0.62, 0, height);
+        glow.addColorStop(0, rgb(palette.horizon, 0));
+        glow.addColorStop(1, rgb(lerpRGB(palette.horizon, palette.light, 0.5), 0.18 * near));
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, height * 0.62, width, height * 0.38);
+      }
+    }
+  }
 }
