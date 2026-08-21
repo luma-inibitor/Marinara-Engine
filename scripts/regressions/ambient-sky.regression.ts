@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import {
   ambientWindAt,
+  clampWeatherTuning,
+  DEFAULT_WEATHER_TUNING,
   deriveMoonPhase,
+  effectiveParticleCount,
   moonAltitude,
   resolveWeatherRenderConfig,
   sampleSkyPalette,
@@ -128,5 +131,21 @@ for (let frame = 0; frame < 20000; frame += 7) {
 }
 assert.ok(maxWind <= 1.01 && minWind >= -1.01);
 assert.ok(maxWind - minWind > 1);
+
+// ── Tuning knobs ──
+// Defaults are identity; unknown and non-finite values are ignored; every knob
+// clamps into its slider range.
+assert.deepEqual(clampWeatherTuning(null), DEFAULT_WEATHER_TUNING);
+assert.deepEqual(clampWeatherTuning({}), DEFAULT_WEATHER_TUNING);
+const cranked = clampWeatherTuning({ rainAmount: 99, snowGravity: -5, wind: Number.NaN, sky: 0 });
+assert.equal(cranked.rainAmount, 2.5);
+assert.equal(cranked.snowGravity, 0.3);
+assert.equal(cranked.wind, 1);
+assert.equal(cranked.sky, 0);
+// Amount knobs scale the particle target for their own weather only.
+const rainCfg = resolveWeatherRenderConfig("heavy rain", "noon");
+assert.equal(effectiveParticleCount(rainCfg, DEFAULT_WEATHER_TUNING), rainCfg.count);
+assert.equal(effectiveParticleCount(rainCfg, clampWeatherTuning({ rainAmount: 2 })), rainCfg.count * 2);
+assert.equal(effectiveParticleCount(rainCfg, clampWeatherTuning({ snowAmount: 2 })), rainCfg.count);
 
 console.log("ambient-sky regression: all checks passed");
