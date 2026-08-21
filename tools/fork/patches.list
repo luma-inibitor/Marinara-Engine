@@ -9,4 +9,5 @@ patch/mari-unsandboxed-shell
 patch/capability-relink-node-modules
 patch/fork-upstream-diagnostics
 patch/ambient-sky
+patch/back-dismiss-overlays
 patch/fork-tooling
