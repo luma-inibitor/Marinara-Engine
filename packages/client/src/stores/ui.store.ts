@@ -16,6 +16,7 @@ import {
 } from "@marinara-engine/shared";
 import type { LegacyNoodleNavigationState as NoodleNavigationState } from "../lib/legacy-noodle-navigation";
 import { isCssGradient, RAINBOW_GRADIENT_PRESET } from "../lib/css-colors";
+import { clampWeatherTuning, DEFAULT_WEATHER_TUNING, type WeatherEffectTuning } from "../lib/weather-renderer";
 import { announceChatFloatingUiDismiss } from "../lib/chat-floating-ui-events";
 import { detectConversationTimeZone, normalizeConversationTimeZone } from "../lib/conversation-time-zone";
 import { BASIC_PANEL_SORT_OPTIONS, normalizeBasicPanelSort, type BasicPanelSort } from "../lib/panel-sort";
@@ -900,6 +901,8 @@ interface UIState {
 
   // ── Roleplay Effects ──
   weatherEffects: boolean;
+  /** Multipliers for the ambient weather layer (1 = stock look). */
+  weatherTuning: WeatherEffectTuning;
 
   // ── Legacy Custom Themes ──
   /** Legacy active custom theme id (null = built-in default). Migration only. */
@@ -1172,6 +1175,8 @@ interface UIState {
   setEnterToSendGame: (v: boolean) => void;
   setEnterToSendProfessorMari: (v: boolean) => void;
   setWeatherEffects: (v: boolean) => void;
+  setWeatherTuning: (patch: Partial<WeatherEffectTuning>) => void;
+  resetWeatherTuning: () => void;
   // Impersonate settings actions
   setImpersonatePromptTemplate: (v: string) => void;
   selectImpersonatePromptTemplate: (template: { id: string; prompt: string } | null) => void;
@@ -1371,6 +1376,7 @@ export function pickSyncedSettings(state: UIState) {
     enterToSendGame: state.enterToSendGame,
     enterToSendProfessorMari: state.enterToSendProfessorMari,
     weatherEffects: state.weatherEffects,
+    weatherTuning: state.weatherTuning,
     hasCompletedOnboarding: state.hasCompletedOnboarding,
     chatHelpSeenModes: state.chatHelpSeenModes,
     chatHelpButtonHidden: state.chatHelpButtonHidden,
@@ -1601,6 +1607,7 @@ export const useUIStore = create<UIState>()(
       enterToSendGame: true,
       enterToSendProfessorMari: true,
       weatherEffects: true,
+      weatherTuning: { ...DEFAULT_WEATHER_TUNING },
       activeCustomTheme: null,
       customThemes: [],
       hasMigratedCustomThemesToServer: false,
@@ -2526,6 +2533,9 @@ export const useUIStore = create<UIState>()(
       setEnterToSendGame: (v) => set({ enterToSendGame: v }),
       setEnterToSendProfessorMari: (v) => set({ enterToSendProfessorMari: v }),
       setWeatherEffects: (v) => set({ weatherEffects: v }),
+      setWeatherTuning: (patch) =>
+        set((state) => ({ weatherTuning: clampWeatherTuning({ ...state.weatherTuning, ...patch }) })),
+      resetWeatherTuning: () => set({ weatherTuning: { ...DEFAULT_WEATHER_TUNING } }),
       setImpersonatePromptTemplate: (v) => set({ impersonatePromptTemplate: v }),
       selectImpersonatePromptTemplate: (template) =>
         set({
@@ -3361,6 +3371,7 @@ export const useUIStore = create<UIState>()(
         enterToSendGame: state.enterToSendGame,
         enterToSendProfessorMari: state.enterToSendProfessorMari,
         weatherEffects: state.weatherEffects,
+        weatherTuning: state.weatherTuning,
         hasMigratedCustomThemesToServer: state.hasMigratedCustomThemesToServer,
         activeCustomTheme: state.activeCustomTheme,
         customThemes: state.customThemes,

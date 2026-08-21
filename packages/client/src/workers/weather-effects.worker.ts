@@ -2,14 +2,18 @@ import {
   advanceSnowParticle,
   AmbientSkyRenderer,
   ambientWindAt,
+  clampWeatherTuning,
   createLightningStrike,
   createWeatherParticle,
+  DEFAULT_WEATHER_TUNING,
   drawLightningBolt,
   drawLightningFlash,
   drawWeatherParticle,
+  effectiveParticleCount,
   fadeWeatherParticlesForConfig,
   WIND_RESPONSE,
   type LightningStrike,
+  type WeatherEffectTuning,
   type WeatherParticle,
   type WeatherRenderConfig,
 } from "../lib/weather-renderer";
@@ -19,6 +23,7 @@ type InitMessage = {
   canvas: OffscreenCanvas;
   config: WeatherRenderConfig;
   moonPhase: number;
+  tuning: WeatherEffectTuning;
   showCelestial: boolean;
   width: number;
   height: number;
@@ -28,7 +33,8 @@ type InitMessage = {
 type ResizeMessage = Pick<InitMessage, "width" | "height" | "scale"> & { type: "resize" };
 type VisibilityMessage = { type: "visibility"; hidden: boolean };
 type ConfigMessage = { type: "config"; config: WeatherRenderConfig; moonPhase: number };
-type WeatherWorkerMessage = InitMessage | ResizeMessage | VisibilityMessage | ConfigMessage;
+type TuningMessage = { type: "tuning"; tuning: WeatherEffectTuning };
+type WeatherWorkerMessage = InitMessage | ResizeMessage | VisibilityMessage | ConfigMessage | TuningMessage;
 
 const FRAME_MS = 1000 / 30;
 const BASE_FRAME_MS = 1000 / 60;
@@ -50,13 +56,15 @@ let lightningAlpha = 0;
 let nextLightning = Infinity;
 let lightningStrike: LightningStrike | null = null;
 let boltAlpha = 0;
+let tuning: WeatherEffectTuning = DEFAULT_WEATHER_TUNING;
 const renderer = new AmbientSkyRenderer();
 
 function populateParticles() {
   if (!config) return;
   particles = [];
-  for (let index = 0; index < config.count; index += 1) {
-    particles.push(createWeatherParticle(config.type, width, height));
+  const initialCount = effectiveParticleCount(config, tuning);
+  for (let index = 0; index < initialCount; index += 1) {
+    particles.push(createWeatherParticle(config.type, width, height, false, tuning));
   }
   if (config.addFireflies) {
     for (let index = 0; index < FIREFLY_COUNT; index += 1) {
@@ -108,7 +116,8 @@ function drawFrame(now: number, advanceSimulation = true) {
   renderer.drawBodies(context, frameCount, showCelestial);
   renderer.drawOver(context, frameCount);
 
-  const wind = ambientWindAt(frameCount) * config.mood.windStrength;
+  const targetCount = effectiveParticleCount(config, tuning);
+  const wind = ambientWindAt(frameCount) * config.mood.windStrength * tuning.wind;
   let baseCount = 0;
   for (const particle of particles) if (particle.type === config.type) baseCount += 1;
 
@@ -138,8 +147,8 @@ function drawFrame(now: number, advanceSimulation = true) {
     // Retired weather types fade out and are removed instead of respawning.
     const outside = particle.y > height + 20 || particle.y < -20 || particle.x > width + 20 || particle.x < -20;
     if (outside || particle.life > particle.maxLife) {
-      if (particle.type === config.type && baseCount <= config.count) {
-        particles[index] = createWeatherParticle(particle.type, width, height, true);
+      if (particle.type === config.type && baseCount <= targetCount) {
+        particles[index] = createWeatherParticle(particle.type, width, height, true, tuning);
       } else if (particle.type === "firefly" && config.addFireflies) {
         particles[index] = createWeatherParticle("firefly", width, height, true);
       } else {
@@ -150,10 +159,10 @@ function drawFrame(now: number, advanceSimulation = true) {
   }
 
   // Trickle the new weather's particles in rather than seeding all at once.
-  if (baseCount < config.count) {
-    const deficit = Math.min(config.count - baseCount, Math.ceil(2 * frameScale));
+  if (baseCount < targetCount) {
+    const deficit = Math.min(targetCount - baseCount, Math.ceil(2 * frameScale));
     for (let index = 0; index < deficit; index += 1) {
-      particles.push(createWeatherParticle(config.type, width, height, true));
+      particles.push(createWeatherParticle(config.type, width, height, true, tuning));
     }
   }
   if (config.addFireflies) {
@@ -212,7 +221,9 @@ self.onmessage = (event: MessageEvent<WeatherWorkerMessage>) => {
     canvas = message.canvas;
     context = canvas.getContext("2d");
     config = message.config;
+    tuning = clampWeatherTuning(message.tuning);
     renderer.setConfig(message.config, message.moonPhase);
+    renderer.setTuning(tuning);
     showCelestial = message.showCelestial;
     nextLightning = config.lightning ? 200 + Math.random() * 400 : Infinity;
     lightningStrike = null;
@@ -224,6 +235,9 @@ self.onmessage = (event: MessageEvent<WeatherWorkerMessage>) => {
   } else if (message.type === "config") {
     // World-state update: crossfade in place — never a teardown.
     adoptConfig(message.config, message.moonPhase);
+  } else if (message.type === "tuning") {
+    tuning = clampWeatherTuning(message.tuning);
+    renderer.setTuning(tuning);
   } else if (message.type === "resize") {
     resizeSurface(message.width, message.height, message.scale);
     // Resizing a canvas clears it. Repaint in the same worker task so the
