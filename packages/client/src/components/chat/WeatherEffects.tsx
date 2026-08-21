@@ -6,24 +6,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { advanceWeatherFrameClock } from "../../lib/weather-frame-clock";
 import { useReducedAmbientEffects } from "../../hooks/use-reduced-ambient-effects";
 import {
-  AmbientScene,
+  advanceSnowParticle,
+  AmbientSkyRenderer,
   ambientWindAt,
   createLightningStrike,
   createWeatherParticle,
   deriveMoonPhase,
   drawLightningBolt,
   drawLightningFlash,
-  drawLuminousMoon,
-  drawLuminousSun,
   drawWeatherParticle,
-  moonAltitude,
+  fadeWeatherParticlesForConfig,
   resolveWeatherRenderConfig,
-  sunElevation,
-  weatherCelestialX,
-  weatherCelestialY,
   WIND_RESPONSE,
   type LightningStrike,
   type WeatherParticle,
+  type WeatherRenderConfig,
 } from "../../lib/weather-renderer";
 
 const MAX_CANVAS_DPR = 1;
@@ -71,6 +68,17 @@ export function WeatherEffects({
     return resolveWeatherRenderConfig(weather, timeOfDay);
   }, [weather, timeOfDay]);
   const moonPhase = useMemo(() => deriveMoonPhase(worldDate), [worldDate]);
+  // The render loops read these through refs so a world-state update flows
+  // into the living canvas as a crossfade instead of remounting it.
+  const configRef = useRef(config);
+  configRef.current = config;
+  const moonPhaseRef = useRef(moonPhase);
+  moonPhaseRef.current = moonPhase;
+
+  // Worker path: push config changes as messages; the worker crossfades.
+  useEffect(() => {
+    workerRef.current?.postMessage({ type: "config", config, moonPhase });
+  }, [config, moonPhase]);
 
   // Render when we have particles, celestial bodies, or time-based ambient effects
   const shouldDrawCelestial = showCelestial && config.celestial !== "none";
@@ -118,8 +126,8 @@ export function WeatherEffects({
               {
                 type: "init",
                 canvas: offscreen,
-                config,
-                moonPhase,
+                config: configRef.current,
+                moonPhase: moonPhaseRef.current,
                 showCelestial,
                 width: rect.width,
                 height: rect.height,
@@ -166,11 +174,13 @@ export function WeatherEffects({
     if (!ctx) return;
 
     let running = true;
-    const scene = new AmbientScene();
+    const renderer = new AmbientSkyRenderer();
+    let activeConfig: WeatherRenderConfig = configRef.current;
+    renderer.setConfig(activeConfig, moonPhaseRef.current);
     let lightningAlpha = 0; // for lightning flash
     let lightningStrike: LightningStrike | null = null;
     let boltAlpha = 0;
-    let nextLightning = config.lightning ? 200 + Math.random() * 400 : Infinity;
+    let nextLightning = activeConfig.lightning ? 200 + Math.random() * 400 : Infinity;
     let frameCount = 0;
     let previousFrameTime = 0;
     let accumulatedFrameTime = 0;
@@ -184,7 +194,7 @@ export function WeatherEffects({
       canvas.width = Math.max(1, Math.round(rect.width * canvasScale));
       canvas.height = Math.max(1, Math.round(rect.height * canvasScale));
       ctx.setTransform(canvasScale, 0, 0, canvasScale, 0, 0);
-      scene.resize(rect.width, rect.height);
+      renderer.resize(rect.width, rect.height);
     };
     resize();
     window.addEventListener("resize", resize);
@@ -194,10 +204,10 @@ export function WeatherEffects({
     const w = canvas.width / canvasScale;
     const h = canvas.height / canvasScale;
 
-    for (let i = 0; i < config.count; i++) {
-      particlesRef.current.push(createWeatherParticle(config.type, w, h));
+    for (let i = 0; i < activeConfig.count; i++) {
+      particlesRef.current.push(createWeatherParticle(activeConfig.type, w, h));
     }
-    if (config.addFireflies) {
+    if (activeConfig.addFireflies) {
       for (let i = 0; i < FIREFLY_COUNT; i++) {
         particlesRef.current.push(createWeatherParticle("firefly", w, h));
       }
@@ -228,32 +238,27 @@ export function WeatherEffects({
       ctx.clearRect(0, 0, cw, ch);
       frameCount += frameScale;
 
-      // Sky wash, star field, meteors, aurora
-      scene.drawUnder(ctx, config, frameCount, frameScale);
-
-      // ── Celestial bodies (sun / moon) — dimmed by weather, never hard-hidden ──
-      if (shouldDrawCelestial) {
-        const bodyRadius = Math.min(cw, ch) * 0.035; // ~3.5% of smallest dimension
-        const hour = config.sceneHour >= 0 ? config.sceneHour : 12;
-
-        if (config.celestial === "sun") {
-          const sx = weatherCelestialX(hour, cw);
-          const sy = weatherCelestialY(hour, ch, false);
-          drawLuminousSun(ctx, sx, sy, bodyRadius, sunElevation(hour), frameCount, config.mood.bodyDim);
-        } else if (config.celestial === "moon") {
-          // Moon position: map 21h→left, 0h→center, 5h→right
-          const moonNorm = hour >= 12 ? ((hour - 21 + 24) % 24) / 10 : (hour + 3) / 10;
-          const mx = cw * 0.1 + Math.min(1, Math.max(0, moonNorm)) * cw * 0.8;
-          const my = weatherCelestialY(hour, ch, true);
-          drawLuminousMoon(ctx, mx, my, bodyRadius * 1.28, moonAltitude(hour), moonPhase, config.mood.bodyDim);
+      // Adopt world-state changes without remounting: the renderer crossfades
+      // the sky, particles turn over gradually below.
+      if (renderer.setConfig(configRef.current, moonPhaseRef.current)) {
+        activeConfig = configRef.current;
+        fadeWeatherParticlesForConfig(particlesRef.current, activeConfig);
+        if (activeConfig.lightning && nextLightning === Infinity) {
+          nextLightning = frameCount + 200 + Math.random() * 400;
+        } else if (!activeConfig.lightning) {
+          nextLightning = Infinity;
         }
       }
+      renderer.advance(frameScale);
 
-      // Cloud deck, weather veil, fog banks, horizon glow
-      scene.drawOver(ctx, config, frameCount);
+      renderer.drawUnder(ctx, frameCount, frameScale);
+      renderer.drawBodies(ctx, frameCount, showCelestial);
+      renderer.drawOver(ctx, frameCount);
 
-      const wind = ambientWindAt(frameCount) * config.mood.windStrength;
+      const wind = ambientWindAt(frameCount) * activeConfig.mood.windStrength;
       const particles = particlesRef.current;
+      let baseCount = 0;
+      for (const p of particles) if (p.type === activeConfig.type) baseCount++;
 
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
@@ -264,48 +269,72 @@ export function WeatherEffects({
         p.y += p.vy * frameScale;
 
         // Wobble for organic movement
-        if (p.type === "snow" || p.type === "leaf" || p.type === "petal" || p.type === "ash") {
-          p.wobble += 0.02 * frameScale;
-          p.x += Math.sin(p.wobble) * 0.5 * frameScale;
+        if (p.type === "snow") {
+          advanceSnowParticle(p, frameCount, frameScale, wind);
+        } else {
+          if (p.type === "leaf" || p.type === "petal" || p.type === "ash") {
+            p.wobble += 0.02 * frameScale;
+            p.x += Math.sin(p.wobble) * 0.5 * frameScale;
+          }
+          if (p.type === "ember") {
+            p.wobble += 0.04 * frameScale;
+            p.x += Math.sin(p.wobble) * 0.6 * frameScale;
+          }
+          if (p.type === "firefly") {
+            p.wobble += 0.03 * frameScale;
+            p.x += Math.sin(p.wobble) * 0.8 * frameScale;
+            p.y += Math.cos(p.wobble * 0.7) * 0.4 * frameScale;
+          }
+          const windResponse = WIND_RESPONSE[p.type];
+          if (windResponse) p.x += wind * windResponse * frameScale;
         }
-        if (p.type === "ember") {
-          p.wobble += 0.04 * frameScale;
-          p.x += Math.sin(p.wobble) * 0.6 * frameScale;
-        }
-        if (p.type === "firefly") {
-          p.wobble += 0.03 * frameScale;
-          p.x += Math.sin(p.wobble) * 0.8 * frameScale;
-          p.y += Math.cos(p.wobble * 0.7) * 0.4 * frameScale;
-        }
-        const windResponse = WIND_RESPONSE[p.type];
-        if (windResponse) p.x += wind * windResponse * frameScale;
 
         drawWeatherParticle(ctx, p);
 
-        // Respawn if off-screen or expired
+        // Respawn if off-screen or expired. After a weather change, particles
+        // of retired types are removed here instead of respawning, so one
+        // weather fades out while the next trickles in.
         const offScreen = p.y > ch + 20 || p.y < -20 || p.x > cw + 20 || p.x < -20;
         if (offScreen || p.life > p.maxLife) {
-          particles[i] = createWeatherParticle(p.type, cw, ch, true);
+          if (p.type === activeConfig.type && baseCount <= activeConfig.count) {
+            particles[i] = createWeatherParticle(p.type, cw, ch, true);
+          } else if (p.type === "firefly" && activeConfig.addFireflies) {
+            particles[i] = createWeatherParticle("firefly", cw, ch, true);
+          } else {
+            particles.splice(i, 1);
+            if (p.type === activeConfig.type) baseCount--;
+          }
         }
       }
 
+      // Trickle the new weather's particles in rather than seeding them all at once.
+      if (baseCount < activeConfig.count) {
+        const deficit = Math.min(activeConfig.count - baseCount, Math.ceil(2 * frameScale));
+        for (let i = 0; i < deficit; i++) particles.push(createWeatherParticle(activeConfig.type, cw, ch, true));
+      }
+      if (activeConfig.addFireflies) {
+        let fireflies = 0;
+        for (const p of particles) if (p.type === "firefly") fireflies++;
+        if (fireflies < FIREFLY_COUNT) particles.push(createWeatherParticle("firefly", cw, ch, true));
+      }
+
       // Lightning flash (epilepsy-safe: capped alpha, gentle decay, long gap between flashes)
-      if (config.lightning) {
+      if (activeConfig.lightning) {
         if (frameCount >= nextLightning) {
           lightningAlpha = 0.45 + Math.random() * 0.15; // soft flash, max 0.6
           nextLightning = frameCount + 400 + Math.random() * 800; // next in ~7-20s at 60fps
           lightningStrike = createLightningStrike(cw, ch);
           boltAlpha = 1;
         }
-        if (lightningAlpha > 0 && lightningStrike) {
-          drawLightningFlash(ctx, lightningStrike, lightningAlpha, cw, ch);
-          if (boltAlpha > 0) {
-            drawLightningBolt(ctx, lightningStrike, boltAlpha);
-            boltAlpha -= frameScale / 8;
-          }
-          lightningAlpha *= Math.pow(0.88, frameScale); // gentle decay
-          if (lightningAlpha < 0.01) lightningAlpha = 0;
+      }
+      if (lightningAlpha > 0 && lightningStrike) {
+        drawLightningFlash(ctx, lightningStrike, lightningAlpha, cw, ch);
+        if (boltAlpha > 0) {
+          drawLightningBolt(ctx, lightningStrike, boltAlpha);
+          boltAlpha -= frameScale / 8;
         }
+        lightningAlpha *= Math.pow(0.88, frameScale); // gentle decay
+        if (lightningAlpha < 0.01) lightningAlpha = 0;
       }
 
       frameRef.current = requestAnimationFrame(tick);
@@ -328,13 +357,15 @@ export function WeatherEffects({
       window.removeEventListener("resize", resize);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [config, moonPhase, shouldDrawCelestial, shouldRender, showCelestial, workerFailed]);
+    // configRef/moonPhaseRef flow config changes into the running loop; only
+    // render-target changes rebuild the pipeline.
+  }, [shouldRender, showCelestial, workerFailed]);
 
   if (!shouldRender) return null;
 
   return (
     <canvas
-      key={`${weather ?? ""}:${timeOfDay ?? ""}:${worldDate ?? ""}:${showCelestial ? "celestial" : "particles"}:${workerFailed ? "fallback" : "worker"}`}
+      key={`${showCelestial ? "celestial" : "particles"}:${workerFailed ? "fallback" : "worker"}`}
       ref={canvasRef}
       className="pointer-events-none absolute inset-0 z-0 h-full w-full transform-gpu [contain:strict] [will-change:transform]"
     />
