@@ -22,6 +22,20 @@ import {
   type TrackerThoughtBubbleDisplay,
   type VisualTheme,
 } from "../../stores/ui.store";
+import { WEATHER_TUNING_RANGES, type WeatherEffectTuning } from "../../lib/weather-renderer";
+
+const WEATHER_TUNING_KNOBS: ReadonlyArray<{ key: keyof WeatherEffectTuning }> = [
+  { key: "sky" },
+  { key: "wind" },
+  { key: "cloudDensity" },
+  { key: "godRays" },
+  { key: "rainAmount" },
+  { key: "rainSpeed" },
+  { key: "snowAmount" },
+  { key: "snowGravity" },
+  { key: "snowFlutter" },
+  { key: "snowSize" },
+];
 import { APP_LANGUAGE_OPTIONS } from "../../localization/locale-loader";
 import { useLocalizedUiText } from "../../localization/use-localized-ui-text";
 import { cn, copyToClipboard } from "../../lib/utils";
@@ -4667,6 +4681,9 @@ function AppearanceSettings() {
   const setConversationAvatarShape = useUIStore((s) => s.setConversationAvatarShape);
   const weatherEffects = useUIStore((s) => s.weatherEffects);
   const setWeatherEffects = useUIStore((s) => s.setWeatherEffects);
+  const weatherTuning = useUIStore((s) => s.weatherTuning);
+  const setWeatherTuning = useUIStore((s) => s.setWeatherTuning);
+  const resetWeatherTuning = useUIStore((s) => s.resetWeatherTuning);
   // Text appearance
   const chatFontColor = useUIStore((s) => s.chatFontColor);
   const setChatFontColor = useUIStore((s) => s.setChatFontColor);
@@ -5678,6 +5695,47 @@ function AppearanceSettings() {
               {localizeUi("ui.panels.appearancesettings.agentToBeEnabledSoWeatherDataIsExtracted")}
             </p>
           </div>
+
+          {weatherEffects && (
+            <div className="flex flex-col gap-2 pl-6">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium">{localizeUi("settings.controls.weatherTuning.title")}</span>
+                <button
+                  type="button"
+                  onClick={resetWeatherTuning}
+                  className="rounded-md px-2 py-0.5 text-[0.625rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)]"
+                >
+                  {localizeUi("settings.controls.weatherTuning.reset")}
+                </button>
+              </div>
+              <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
+                {WEATHER_TUNING_KNOBS.map((knob) => (
+                  <label key={knob.key} className="flex min-w-0 flex-col gap-1">
+                    <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
+                      {localizeUi(`settings.controls.weatherTuning.${knob.key}`)}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={WEATHER_TUNING_RANGES[knob.key][0]}
+                        max={WEATHER_TUNING_RANGES[knob.key][1]}
+                        step={0.05}
+                        value={weatherTuning[knob.key]}
+                        onChange={(e) => setWeatherTuning({ [knob.key]: Number(e.target.value) })}
+                        className="min-w-0 flex-1 accent-[var(--primary)]"
+                      />
+                      <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                        {Math.round(weatherTuning[knob.key] * 100)}%
+                      </span>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                {localizeUi("settings.controls.weatherTuning.help")}
+              </p>
+            </div>
+          )}
         </div>
       </SettingsSection>
 

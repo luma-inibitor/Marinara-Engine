@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { advanceWeatherFrameClock } from "../../lib/weather-frame-clock";
 import { useReducedAmbientEffects } from "../../hooks/use-reduced-ambient-effects";
+import { useUIStore } from "../../stores/ui.store";
 import {
   advanceSnowParticle,
   AmbientSkyRenderer,
@@ -14,7 +15,9 @@ import {
   deriveMoonPhase,
   drawLightningBolt,
   drawLightningFlash,
+  clampWeatherTuning,
   drawWeatherParticle,
+  effectiveParticleCount,
   fadeWeatherParticlesForConfig,
   resolveWeatherRenderConfig,
   WIND_RESPONSE,
@@ -68,17 +71,24 @@ export function WeatherEffects({
     return resolveWeatherRenderConfig(weather, timeOfDay);
   }, [weather, timeOfDay]);
   const moonPhase = useMemo(() => deriveMoonPhase(worldDate), [worldDate]);
+  const storedTuning = useUIStore((s) => s.weatherTuning);
+  const tuning = useMemo(() => clampWeatherTuning(storedTuning), [storedTuning]);
   // The render loops read these through refs so a world-state update flows
   // into the living canvas as a crossfade instead of remounting it.
   const configRef = useRef(config);
   configRef.current = config;
   const moonPhaseRef = useRef(moonPhase);
   moonPhaseRef.current = moonPhase;
+  const tuningRef = useRef(tuning);
+  tuningRef.current = tuning;
 
   // Worker path: push config changes as messages; the worker crossfades.
   useEffect(() => {
     workerRef.current?.postMessage({ type: "config", config, moonPhase });
   }, [config, moonPhase]);
+  useEffect(() => {
+    workerRef.current?.postMessage({ type: "tuning", tuning });
+  }, [tuning]);
 
   // Render when we have particles, celestial bodies, or time-based ambient effects
   const shouldDrawCelestial = showCelestial && config.celestial !== "none";
@@ -128,6 +138,7 @@ export function WeatherEffects({
                 canvas: offscreen,
                 config: configRef.current,
                 moonPhase: moonPhaseRef.current,
+                tuning: tuningRef.current,
                 showCelestial,
                 width: rect.width,
                 height: rect.height,
@@ -177,6 +188,7 @@ export function WeatherEffects({
     const renderer = new AmbientSkyRenderer();
     let activeConfig: WeatherRenderConfig = configRef.current;
     renderer.setConfig(activeConfig, moonPhaseRef.current);
+    renderer.setTuning(tuningRef.current);
     let lightningAlpha = 0; // for lightning flash
     let lightningStrike: LightningStrike | null = null;
     let boltAlpha = 0;
@@ -204,8 +216,9 @@ export function WeatherEffects({
     const w = canvas.width / canvasScale;
     const h = canvas.height / canvasScale;
 
-    for (let i = 0; i < activeConfig.count; i++) {
-      particlesRef.current.push(createWeatherParticle(activeConfig.type, w, h));
+    const initialCount = effectiveParticleCount(activeConfig, tuningRef.current);
+    for (let i = 0; i < initialCount; i++) {
+      particlesRef.current.push(createWeatherParticle(activeConfig.type, w, h, false, tuningRef.current));
     }
     if (activeConfig.addFireflies) {
       for (let i = 0; i < FIREFLY_COUNT; i++) {
@@ -249,13 +262,16 @@ export function WeatherEffects({
           nextLightning = Infinity;
         }
       }
+      renderer.setTuning(tuningRef.current);
       renderer.advance(frameScale);
 
       renderer.drawUnder(ctx, frameCount, frameScale);
       renderer.drawBodies(ctx, frameCount, showCelestial);
       renderer.drawOver(ctx, frameCount);
 
-      const wind = ambientWindAt(frameCount) * activeConfig.mood.windStrength;
+      const tuningNow = tuningRef.current;
+      const targetCount = effectiveParticleCount(activeConfig, tuningNow);
+      const wind = ambientWindAt(frameCount) * activeConfig.mood.windStrength * tuningNow.wind;
       const particles = particlesRef.current;
       let baseCount = 0;
       for (const p of particles) if (p.type === activeConfig.type) baseCount++;
@@ -296,8 +312,8 @@ export function WeatherEffects({
         // weather fades out while the next trickles in.
         const offScreen = p.y > ch + 20 || p.y < -20 || p.x > cw + 20 || p.x < -20;
         if (offScreen || p.life > p.maxLife) {
-          if (p.type === activeConfig.type && baseCount <= activeConfig.count) {
-            particles[i] = createWeatherParticle(p.type, cw, ch, true);
+          if (p.type === activeConfig.type && baseCount <= targetCount) {
+            particles[i] = createWeatherParticle(p.type, cw, ch, true, tuningNow);
           } else if (p.type === "firefly" && activeConfig.addFireflies) {
             particles[i] = createWeatherParticle("firefly", cw, ch, true);
           } else {
@@ -308,9 +324,11 @@ export function WeatherEffects({
       }
 
       // Trickle the new weather's particles in rather than seeding them all at once.
-      if (baseCount < activeConfig.count) {
-        const deficit = Math.min(activeConfig.count - baseCount, Math.ceil(2 * frameScale));
-        for (let i = 0; i < deficit; i++) particles.push(createWeatherParticle(activeConfig.type, cw, ch, true));
+      if (baseCount < targetCount) {
+        const deficit = Math.min(targetCount - baseCount, Math.ceil(2 * frameScale));
+        for (let i = 0; i < deficit; i++) {
+          particles.push(createWeatherParticle(activeConfig.type, cw, ch, true, tuningNow));
+        }
       }
       if (activeConfig.addFireflies) {
         let fireflies = 0;
