@@ -45,8 +45,13 @@ done
 
 [ -f "$LIST" ] || die "Patch list not found: $LIST"
 BASE_BRANCH="${BASE_REMOTE_REF##*/}"          # upstream/staging -> staging
-mapfile -t PATCHES < <(grep -vE '^\s*(#|$)' "$LIST")
-[ "${#PATCHES[@]}" -gt 0 ] || die "Patch list is empty: $LIST"
+# Read the queue with a plain read loop, not `mapfile` -- macOS still ships
+# bash 3.2, where that builtin does not exist.
+PATCHES=()
+while IFS= read -r patch_line; do
+  PATCHES+=("$patch_line")
+done < <(grep -vE '^\s*(#|$)' "$LIST")
+[ "${#PATCHES[@]-0}" -gt 0 ] || die "Patch list is empty: $LIST"
 
 # A dirty tree would be silently stashed away by checkout/rebase. Refuse instead.
 [ -z "$(git status --porcelain)" ] || die "Working tree is dirty. Commit or stash first."
