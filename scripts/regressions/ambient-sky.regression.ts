@@ -58,11 +58,15 @@ for (const [weather, label] of MOOD_CASES) {
   assert.ok(mood.bodyDim > 0 && mood.bodyDim <= 1, `${label}: bodyDim out of range`);
   assert.ok(mood.cloudiness >= 0 && mood.cloudiness <= 1, `${label}: cloudiness out of range`);
   assert.ok(mood.starIntensity >= 0 && mood.starIntensity <= 1, `${label}: starIntensity out of range`);
+  assert.ok(mood.murk >= 0 && mood.murk <= 1, `${label}: murk out of range`);
 }
 
-// Storms dim the body hardest; clear weather not at all.
+// Storms dim and diffuse the body hardest; clear weather not at all.
 assert.equal(resolveWeatherRenderConfig("clear", "noon").mood.bodyDim, 1);
-assert.ok(resolveWeatherRenderConfig("thunderstorm", "noon").mood.bodyDim < 0.4);
+assert.equal(resolveWeatherRenderConfig("clear", "noon").mood.murk, 0);
+assert.ok(resolveWeatherRenderConfig("thunderstorm", "noon").mood.bodyDim < 0.5);
+assert.ok(resolveWeatherRenderConfig("thunderstorm", "noon").mood.murk >= 0.8);
+assert.ok(resolveWeatherRenderConfig("thick fog", "noon").mood.murk > resolveWeatherRenderConfig("light snow", "noon").mood.murk);
 // Fog is the only fog-bank weather.
 assert.equal(resolveWeatherRenderConfig("thick fog", "noon").mood.fogBanks, true);
 assert.equal(resolveWeatherRenderConfig("heavy rain", "noon").mood.fogBanks, false);
