@@ -292,6 +292,7 @@ export function createWeatherParticle(
   w: number,
   h: number,
   fromTop = false,
+  tuning: WeatherEffectTuning = DEFAULT_WEATHER_TUNING,
 ): WeatherParticle {
   const base: WeatherParticle = {
     x: Math.random() * w,
@@ -309,7 +310,7 @@ export function createWeatherParticle(
 
   switch (type) {
     case "rain":
-      base.vy = 8 + Math.random() * 6;
+      base.vy = (8 + Math.random() * 6) * tuning.rainSpeed;
       base.vx = -1 + Math.random() * -2;
       base.size = 1.5;
       base.opacity = 0.3 + Math.random() * 0.2;
@@ -320,12 +321,12 @@ export function createWeatherParticle(
       // flakes are bigger, faster, and softer; far flakes small and dense.
       const z = Math.pow(Math.random(), 1.6) * 0.85 + 0.15;
       base.depth = z;
-      base.vy = (0.55 + z * 1.55) * (0.85 + Math.random() * 0.3);
+      base.vy = (0.55 + z * 1.55) * (0.85 + Math.random() * 0.3) * tuning.snowGravity;
       base.vx = 0;
-      base.size = (0.9 + z * z * 3) * 1.1;
+      base.size = (0.9 + z * z * 3) * 1.1 * tuning.snowSize;
       base.opacity = (0.55 + Math.random() * 0.45) * (0.38 + 0.55 * z);
       base.flutterPhase = Math.random() * Math.PI * 2;
-      base.flutterAmp = (0.5 + z * 1.2) * (0.6 + Math.random() * 0.8) * 0.5;
+      base.flutterAmp = (0.5 + z * 1.2) * (0.6 + Math.random() * 0.8) * 0.5 * tuning.snowFlutter;
       base.flutterRate = 0.55 + Math.random() * 1.1;
       base.maxLife = 800;
       break;
@@ -899,6 +900,71 @@ export function ambientWindAt(frame: number): number {
   return 0.58 * Math.sin(frame * 0.0031) + 0.29 * Math.sin(frame * 0.0087 + 1.7) + 0.14 * Math.sin(frame * 0.019 + 4.1);
 }
 
+// ── User tuning knobs ──
+// Multipliers around the stock look (1 = shipped values). Persisted in the UI
+// store, applied at spawn time for particles and at draw time for the scene,
+// so a knob change flows into the living canvas without a reseed.
+export interface WeatherEffectTuning {
+  /** Sky wash + light grade strength. */
+  sky: number;
+  wind: number;
+  rainAmount: number;
+  rainSpeed: number;
+  snowAmount: number;
+  snowGravity: number;
+  snowFlutter: number;
+  snowSize: number;
+  cloudDensity: number;
+  godRays: number;
+}
+
+export const DEFAULT_WEATHER_TUNING: Readonly<WeatherEffectTuning> = {
+  sky: 1,
+  wind: 1,
+  rainAmount: 1,
+  rainSpeed: 1,
+  snowAmount: 1,
+  snowGravity: 1,
+  snowFlutter: 1,
+  snowSize: 1,
+  cloudDensity: 1,
+  godRays: 1,
+};
+
+/** [min, max] per knob — the ranges the settings sliders expose. */
+export const WEATHER_TUNING_RANGES: Readonly<Record<keyof WeatherEffectTuning, readonly [number, number]>> = {
+  sky: [0, 1.5],
+  wind: [0, 2.5],
+  rainAmount: [0.1, 2.5],
+  rainSpeed: [0.3, 2.5],
+  snowAmount: [0.1, 2.5],
+  snowGravity: [0.3, 2.5],
+  snowFlutter: [0, 2.5],
+  snowSize: [0.5, 2],
+  cloudDensity: [0, 2],
+  godRays: [0, 2],
+};
+
+/** Fill gaps with defaults and clamp every knob into its slider range. */
+export function clampWeatherTuning(partial?: Partial<WeatherEffectTuning> | null): WeatherEffectTuning {
+  const tuning = { ...DEFAULT_WEATHER_TUNING };
+  if (!partial) return tuning;
+  for (const key of Object.keys(WEATHER_TUNING_RANGES) as Array<keyof WeatherEffectTuning>) {
+    const value = partial[key];
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    const [min, max] = WEATHER_TUNING_RANGES[key];
+    tuning[key] = Math.min(max, Math.max(min, value));
+  }
+  return tuning;
+}
+
+/** Particle target for the current weather after the amount knobs. */
+export function effectiveParticleCount(config: WeatherRenderConfig, tuning: WeatherEffectTuning): number {
+  if (config.type === "rain") return Math.round(config.count * tuning.rainAmount);
+  if (config.type === "snow") return Math.round(config.count * tuning.snowAmount);
+  return config.count;
+}
+
 /**
  * Snow motion: a slow gust field sampled by position plus two incommensurate
  * per-flake flutter oscillators, all scaled by depth. Replaces the generic
@@ -1309,6 +1375,8 @@ export class AmbientScene {
   private auroraCanvas: ScratchCanvas | null = null;
   private rayCanvas: ScratchCanvas | null = null;
   private rayCanvasSoft: ScratchCanvas | null = null;
+  /** User tuning; assigned by AmbientSkyRenderer.setTuning. */
+  tuning: WeatherEffectTuning = DEFAULT_WEATHER_TUNING;
   private readonly cloudLayers: CloudLayer[];
 
   constructor() {
@@ -1449,7 +1517,7 @@ export class AmbientScene {
     const palette = sampleSkyPalette(hour);
     const elevation = sunElevation(hour);
     const nightness = clamp01((1 - elevation) / 2);
-    const alphaTop = (0.14 + 0.3 * nightness) * opacity;
+    const alphaTop = Math.min(0.5, (0.14 + 0.3 * nightness) * this.tuning.sky) * opacity;
     const wash = ctx.createLinearGradient(0, 0, 0, height);
     wash.addColorStop(0, rgb(palette.top, alphaTop));
     wash.addColorStop(0.55, rgb(palette.mid, alphaTop * 0.8));
@@ -1458,14 +1526,15 @@ export class AmbientScene {
     ctx.fillRect(0, 0, width, height);
 
     // Moonlight grade — a cool cast that deepens with true night.
-    const coolAlpha = clamp01((-elevation - 0.05) / 0.5) * 0.15 * opacity;
+    const coolAlpha = clamp01((-elevation - 0.05) / 0.5) * 0.15 * Math.min(1.5, this.tuning.sky) * opacity;
     if (coolAlpha > 0.004) {
       ctx.fillStyle = rgb([46, 82, 200], coolAlpha);
       ctx.fillRect(0, 0, width, height);
     }
     // Day lift — soft top-light while the sun is up, so day reads as day
     // over dark chat backgrounds. Alpha-capped low.
-    const dayAlpha = clamp01(elevation) * 0.09 * (1 - config.mood.murk * 0.45) * opacity;
+    const dayAlpha =
+      clamp01(elevation) * 0.09 * (1 - config.mood.murk * 0.45) * Math.min(1.5, this.tuning.sky) * opacity;
     if (dayAlpha > 0.004) {
       const lift = ctx.createLinearGradient(0, 0, 0, height * 0.7);
       lift.addColorStop(0, rgb(lerpRGB(palette.light, [255, 255, 255], 0.4), dayAlpha));
@@ -1678,7 +1747,15 @@ export class AmbientScene {
         const drift = 0.4 + mood.windStrength * 0.6;
         for (let index = 0; index < this.cloudLayers.length; index += 1) {
           const layer = this.cloudLayers[index]!;
-          const alpha = mood.cloudiness * (0.2 - index * 0.045) * (1 + mood.shade * 0.9) * (1 - 0.45 * night) * opacity;
+          const alpha =
+            Math.min(
+              0.5,
+              mood.cloudiness *
+                this.tuning.cloudDensity *
+                (0.2 - index * 0.045) *
+                (1 + mood.shade * 0.9) *
+                (1 - 0.45 * night),
+            ) * opacity;
           if (alpha <= 0.004) continue;
           for (const puff of layer.puffs) {
             const px = (((puff.x + frame * layer.speed * drift) % 1.3) - 0.15) * width;
@@ -1745,11 +1822,18 @@ export class AmbientSkyRenderer {
   private blend = 1;
   private moonPhase = DEFAULT_MOON_PHASE;
   private moonScratch: ScratchCanvas | null = null;
+  private tuning: WeatherEffectTuning = DEFAULT_WEATHER_TUNING;
   private width = 1;
   private height = 1;
 
   get config(): WeatherRenderConfig | null {
     return this.active;
+  }
+
+  setTuning(tuning: WeatherEffectTuning) {
+    if (tuning === this.tuning) return;
+    this.tuning = tuning;
+    this.scene.tuning = tuning;
   }
 
   resize(width: number, height: number) {
@@ -1823,7 +1907,8 @@ export class AmbientSkyRenderer {
       const sunY = weatherCelestialY(hour, height, false);
       const elevation = sunElevation(hour);
       // Ray strength, computed before the sun so its streak can yield.
-      const rayStrength = smoothstep(clamp01(elevation / 0.12)) * Math.max(0, 1 - murk * 1.7) * weight;
+      const rayStrength =
+        smoothstep(clamp01(elevation / 0.12)) * Math.max(0, 1 - murk * 1.7) * this.tuning.godRays * weight;
       drawLuminousSun(ctx, sunX, sunY, radius, elevation, frame, dim, murk, rayStrength);
       if (elevation > 0) this.scene.drawGodRays(ctx, config, frame, sunX, sunY, rayStrength);
       return;
