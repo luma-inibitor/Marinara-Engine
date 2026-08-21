@@ -31,6 +31,8 @@ git fetch upstream
 - New work goes on its own patch branch: `git checkout -B patch/<short-topic> staging`
 - Keep each patch **self-contained and minimal** so it can be rebased forward forever and still be offered upstream. Don't bundle unrelated changes.
 - **Do not edit `CHANGELOG.md`** in a patch — nearly every upstream commit touches it, so it conflicts on every sync. `PATCHES.md` is our record.
+- **Syncs and in-flight work must not overwrite each other.** If you run a sync: `git fetch origin --prune` immediately before rebuilding, and never force-push a `patch/*` branch whose origin tip you have not integrated (the sync script enforces both; push with `--force-with-lease --force-if-includes`). If a sync moves branches under _you_ mid-session: fetch, then cherry-pick your commits onto the moved refs — never force-push your old history back over the sync.
+- **A hotfix cherry-picked straight onto `luma/staging` must also land on its owning `patch/*` branch** before the next sync, or the rebuild will flag it (and, with `--skip-audit`, drop it). The patch branches are the source of truth; the integration branch is a build product.
 
 When the patch is done:
 

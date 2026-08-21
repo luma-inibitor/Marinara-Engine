@@ -2,19 +2,19 @@
 
 This is a long-term fork of [Pasta-Devs/Marinara-Engine](https://github.com/Pasta-Devs/Marinara-Engine), maintained under [luma-inibitor/Marinara-Engine](https://github.com/luma-inibitor/Marinara-Engine). It exists to carry local patches that upstream has declined but that are useful for our own on-device (Android/Termux) use.
 
-For the list of what's actually patched and why, see [`PATCHES.md`](./PATCHES.md). This file is the *how it all works* guide.
+For the list of what's actually patched and why, see [`PATCHES.md`](./PATCHES.md). This file is the _how it all works_ guide.
 
 Starting a coding session with an AI agent? Paste [`tools/fork/AGENT-BRIEF.md`](./tools/fork/AGENT-BRIEF.md) — it briefs the agent on this workflow, the branch rules, and the UI/UX harness.
 
 ## Branch model
 
-| Branch | Role | Rule |
-| --- | --- | --- |
-| `staging` | Pristine mirror of `upstream/staging` — **the base we track** (beta channel) | **Never commit here.** Only ever reset to upstream. |
-| `main` | Pristine mirror of `upstream/main` (stable releases) | **Never commit here.** Kept for reference/rollback. |
-| `patch/*` | One branch per logical local change, based on `staging` | Kept clean and self-contained so any patch could still be offered upstream. |
-| `luma/staging` | **Integration / deploy branch** — `staging` + every `patch/*` + fork docs | This is what you run on-device. Rebuilt on every sync. |
-| `luma/main` | Previous stable-based integration branch | Frozen. Storage-incompatible with `luma/staging` — see the warning below. |
+| Branch         | Role                                                                         | Rule                                                                        |
+| -------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `staging`      | Pristine mirror of `upstream/staging` — **the base we track** (beta channel) | **Never commit here.** Only ever reset to upstream.                         |
+| `main`         | Pristine mirror of `upstream/main` (stable releases)                         | **Never commit here.** Kept for reference/rollback.                         |
+| `patch/*`      | One branch per logical local change, based on `staging`                      | Kept clean and self-contained so any patch could still be offered upstream. |
+| `luma/staging` | **Integration / deploy branch** — `staging` + every `patch/*` + fork docs    | This is what you run on-device. Rebuilt on every sync.                      |
+| `luma/main`    | Previous stable-based integration branch                                     | Frozen. Storage-incompatible with `luma/staging` — see the warning below.   |
 
 > **⚠️ Storage format is a one-way door.** `main` (2.4.1) uses storage version 2; `staging` (2.4.2) uses version 4 and performs a **one-way** monolith→per-chat-shard migration of `messages`, `message_swipes`, `memory_chunks`, `chat_images`, `agent_runs`, and `agent_memory`. Staging refuses to open newer data; **`main` has no such guard** — it finds no `tables/messages.json`, loads messages as empty, and flushes a v2 manifest over your v4 store. Staging preserves the originals as `.pre-shard` and quarantines the downgrade artifact, so it is recoverable, but **never point a v2 build and a v4 build at the same `DATA_DIR`.** Both deploy channels track staging for exactly this reason. Back up `~/marinara-data` before the first staging boot.
 
@@ -33,7 +33,7 @@ git fetch upstream
 
 - **Deploy / run the fork:** check out `luma/staging`.
 - **Run stock upstream instead:** check out `staging`. (Stock `main` is storage-incompatible with your data once staging has migrated it — see the warning above.)
-- Deploy branches are *consumed, not edited*. Never make local commits on `luma/staging`, `staging`, or `main` on a device — do real work on `patch/*` branches from a dev machine and let it flow through `luma/staging`.
+- Deploy branches are _consumed, not edited_. Never make local commits on `luma/staging`, `staging`, or `main` on a device — do real work on `patch/*` branches from a dev machine and let it flow through `luma/staging`.
 - `.env`, `node_modules/`, `packages/*/dist/`, the pnpm store, and your data directory are all gitignored, so **they survive branch switches**. Switching only swaps source code.
 
 ## Syncing with upstream
@@ -44,15 +44,30 @@ git fetch upstream
 tools/fork/apply-patches.sh --check
 ```
 
+(The `.sh` is a thin launcher; the logic lives in `tools/fork/apply-patches.mjs`, plain Node with no dependencies — the repo already requires Node ≥ 24.)
+
 It pushes nothing — it prints the exact push commands when the result looks right. On a real conflict it stops with the failing patch and the commands to resolve it; re-run with `--no-fetch` to continue. Conflicts that are only in `CHANGELOG.md` are resolved automatically (keeping upstream's copy), since nearly every upstream commit touches that file.
 
-Useful flags: `--list` (show the queue), `--base <ref>` (default `upstream/staging`), `--into <branch>` (default `luma/staging`), `--no-fetch`.
+Three guards protect against rebuilding from stale state — the failure mode that has twice dropped pushed commits:
 
-As its last step the script commits a root `fork-base.json` onto the integration branch recording the base it built on:
+- **It fetches `origin` as well as `upstream`**, then compares every local patch branch to its `origin/*` counterpart: a branch that is strictly behind is fast-forwarded automatically; a branch that has truly diverged (origin holds commits this clone never integrated, judged by the branch reflog — the same rule as `git push --force-if-includes`) stops the run with reconciliation steps.
+- **It audits the old integration branch before overwriting it**: any commit on `origin/luma/staging` since the previous stamp with no equivalent (by patch-id, then by subject) in the patch queue is listed and stops the run — that is a hotfix that landed on the integration branch but never made it back to its patch branch, and rebuilding would silently drop it. Commits whose diff is only `CHANGELOG.md`, and commits upstream has since adopted, are exempt — those disappear legitimately. `--skip-audit` overrides when dropping is intentional.
+- **The push commands it prints use `--force-with-lease --force-if-includes`**, so even a push issued later from this clone refuses to overwrite work that was fetched but never integrated.
+
+Useful flags: `--list` (show the queue), `--base <ref>` (default `upstream/staging`), `--into <branch>` (default `luma/staging`), `--no-fetch`, `--skip-audit`.
+
+As its last step the script commits a root `fork-base.json` onto the integration branch recording the base it built on and the exact patch heads it built from:
 
 ```json
-{ "baseRef": "upstream/staging", "baseCommit": "<full sha>", "baseBranch": "staging" }
+{
+  "baseRef": "upstream/staging",
+  "baseCommit": "<full sha>",
+  "baseBranch": "staging",
+  "patches": { "patch/<topic>": "<full sha>", "…": "…" }
+}
 ```
+
+The `patches` map makes "did a sync drop something?" a one-look question: diff it against `origin/patch/*` instead of doing forensic archaeology on the integration history.
 
 `patch/fork-upstream-diagnostics` reads it so Support Diagnostics can name the exact upstream commit the running build contains. Without it the build falls back to a merge base against whatever remote-tracking refs the device happens to have, which on a clone that has not refetched the mirror answers with a stale commit. It lives only on the integration branch — never commit it to `staging`, `main`, or a `patch/*` branch.
 
@@ -63,22 +78,26 @@ To enable or disable a patch, edit `tools/fork/patches.list` and re-run. Order m
 
 ```sh
 git fetch upstream
+git fetch origin --prune            # NEVER skip this: syncing from stale refs drops pushed work
 
 # 1. Refresh the pristine mirrors
 git checkout -B staging upstream/staging && git push --force-with-lease origin staging
 git checkout -B main    upstream/main    && git push --force-with-lease origin main
 
-# 2. Rebase each patch branch onto the new base (resolve conflicts here)
-git checkout patch/mari-unsandboxed-shell
+# 2. Rebase each patch branch onto the new base (resolve conflicts here).
+#    Start each rebase from origin's tip, not a possibly-stale local branch.
+git checkout -B patch/mari-unsandboxed-shell origin/patch/mari-unsandboxed-shell
 git rebase staging
 pnpm install && pnpm check          # validate the rebased patch still builds
-git push --force-with-lease origin patch/mari-unsandboxed-shell
+git push --force-with-lease --force-if-includes origin patch/mari-unsandboxed-shell
 
 # 3. Rebuild the integration branch from the refreshed base + patches
 git checkout -B luma/staging staging
 git cherry-pick <patch commits> && git cherry-pick <fork docs/tooling commits>
 #   ...cherry-pick each patch/* branch's commits, then the fork docs/tooling commits...
-git push --force-with-lease origin luma/staging
+#   Before pushing, confirm nothing on origin/luma/staging is being left behind:
+git log --oneline luma/staging..origin/luma/staging
+git push --force-with-lease --force-if-includes origin luma/staging
 ```
 
 > Because deploy branches are force-pushed on every sync, never do local work on them — a force-push will overwrite it.
@@ -125,7 +144,7 @@ pnpm regression:professor-mari-shell-sandbox  # for the shell patch specifically
 
 ## Running on Android / Termux
 
-The stock `start-termux.sh` auto-updates only `main`/`staging` and lives *inside* the repo (so it changes when you switch branches). The switcher in [`tools/termux/`](./tools/termux/) works around this: it runs two clones (`~/Marinara-fork` on `luma/staging` and `~/Marinara-main` on stock `staging`) that share one data directory (`~/marinara-data`), so you flip between fork and mainline instantly with identical chats, launched from Termux:Widget home-screen icons.
+The stock `start-termux.sh` auto-updates only `main`/`staging` and lives _inside_ the repo (so it changes when you switch branches). The switcher in [`tools/termux/`](./tools/termux/) works around this: it runs two clones (`~/Marinara-fork` on `luma/staging` and `~/Marinara-main` on stock `staging`) that share one data directory (`~/marinara-data`), so you flip between fork and mainline instantly with identical chats, launched from Termux:Widget home-screen icons.
 
 Install on-device:
 
