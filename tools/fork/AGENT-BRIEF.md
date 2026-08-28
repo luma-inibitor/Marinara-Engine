@@ -80,6 +80,6 @@ Seeding conversation/roleplay needs no connection; the game fixture needs a conn
 - Never auto-check validation or test-plan checkboxes — those are mine to tick.
 - Server code uses the shared Pino logger, never `console.*`; client code keeps `console.*`. See `CLAUDE.md § Logging`.
 - Don't revert or "clean up" unrelated work in the tree.
-- Storage note: `staging` is storage v4 and migrates data **one-way** from v2. Never point an older build at a v4 data directory, and never suggest doing so.
+- Storage note: `staging` is storage format 6, `main` is 5, and the sharding migration is **one-way**. Never point an older build at a newer data directory, and never suggest doing so — current builds refuse to open newer data and the launcher blocks the downgrade, but pre-#4708 builds will happily overwrite it.
 
 Tell me up front if my request would be better as two patches, or if it can't be kept self-contained.
