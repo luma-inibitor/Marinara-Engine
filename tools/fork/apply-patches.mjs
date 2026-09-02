@@ -32,6 +32,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
 // small runners — no shell anywhere
@@ -428,13 +429,22 @@ step(`Auditing origin/${opts.into} for commits the rebuild would drop`);
   }
 }
 
+/**
+ * During a rebuild the working tree is the half-built integration branch, and
+ * `tools/` only arrives with patch/fork-tooling (applied last), so the relative
+ * launcher path usually does not exist yet. Point at this file instead.
+ */
+function relaunchHint() {
+  return `Invoke it by absolute path if you need it again:\n    node ${fileURLToPath(import.meta.url)}`;
+}
+
 // ---------------------------------------------------------------------------
 // rebuild the integration branch
 // ---------------------------------------------------------------------------
 
 step(`Rebuilding ${opts.into} from ${baseBranch}`);
 if (!gitOk("checkout", "-q", "-B", opts.into, baseBranch)) die(`Could not create ${opts.into}`);
-for (const patch of patches) {
+for (const [patchIndex, patch] of patches.entries()) {
   const count = gitOut("rev-list", "--count", `${baseBranch}..${patch}`);
   if (count === "0") {
     warn(`skipping empty ${patch}`);
@@ -449,13 +459,21 @@ for (const patch of patches) {
     driveToCompletion("cherry-pick", ["cherry-pick", "--continue"], () => {
       console.error(`\n${red(`Conflict applying ${patch} onto ${opts.into}:`)}`);
       for (const f of conflictedFiles()) console.error(`    ${f}`);
+      const remaining = patches.slice(patchIndex + 1);
+      const finish = remaining.length
+        ? remaining.map((p) => `    git cherry-pick ${baseBranch}..${p}`).join("\n")
+        : "    (nothing after this one — the queue is done once it lands)";
       console.error(`
-Two patches disagree. Resolve, then:
+Two patches disagree. Resolve, then finish the queue by hand:
     git add <file> && git cherry-pick --continue
-    tools/fork/apply-patches.sh --no-fetch     # re-run to finish
+${finish}
+
+Re-running this script does NOT resume: it rebuilds ${opts.into} from
+${baseBranch} and stops at this same conflict. ${relaunchHint()}
 
 Or abort:  git cherry-pick --abort
-If they conflict every sync, reorder them in ${opts.listPath}.`);
+If they conflict every sync, reorder them in ${opts.listPath} — or, when the
+resolution is expected and stable, record the recipe in PATCHES.md.`);
     });
     ok(`applied ${patch} (${count}, CHANGELOG auto-resolved)`);
   }
