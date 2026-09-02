@@ -1,0 +1,14 @@
+{
+  "baseRef": "origin/staging",
+  "baseCommit": "6892cae6b945d3c3d2626e689659e5c1e3f87b55",
+  "baseBranch": "staging",
+  "patches": {
+    "patch/mari-unsandboxed-shell": "2552ef286ca1907d4a5fde2ee1a9c65dd84a0c2d",
+    "patch/capability-relink-node-modules": "b63de7da52835de200bf0c57010d8429aa7f75ac",
+    "patch/fork-upstream-diagnostics": "2804c1b2dd7ba1ad49d5b41c77443efb00063536",
+    "patch/ambient-sky": "e24db2e1c7823b3eb83fd3903dfecd9199996ebe",
+    "patch/weather-resize-repaint": "66e2c7a63acf262d3e259010259691211834cb4b",
+    "patch/impersonate-copy-button": "f81ff8e567f4dfcab56b7abfd4c11aff5a3ab6c6",
+    "patch/fork-tooling": "33208ab740f86e43360434ca54a50bc31a18aa11"
+  }
+}
