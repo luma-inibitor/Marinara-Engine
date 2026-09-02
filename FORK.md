@@ -46,7 +46,7 @@ tools/fork/apply-patches.sh --check
 
 (The `.sh` is a thin launcher; the logic lives in `tools/fork/apply-patches.mjs`, plain Node with no dependencies — the repo already requires Node ≥ 24.)
 
-It pushes nothing — it prints the exact push commands when the result looks right. On a real conflict it stops with the failing patch and the commands to resolve it; re-run with `--no-fetch` to continue. Conflicts that are only in `CHANGELOG.md` are resolved automatically (keeping upstream's copy), since nearly every upstream commit touches that file.
+It pushes nothing — it prints the exact push commands when the result looks right. On a real conflict it stops with the failing patch and the commands to resolve it. Re-running with `--no-fetch` picks up a resolved **rebase** (that phase is idempotent), but it does **not** resume a resolved **rebuild**: the rebuild starts with `git checkout -B <integration> <base>`, so it discards what you just resolved and stops at the same conflict again. Finish that phase by cherry-picking the queue's remaining entries by hand — the conflict message lists them. Note also that `tools/` is not in the working tree mid-rebuild (`patch/fork-tooling` applies last), so relaunch the script by absolute path. Conflicts that are only in `CHANGELOG.md` are resolved automatically (keeping upstream's copy), since nearly every upstream commit touches that file.
 
 Three guards protect against rebuilding from stale state — the failure mode that has twice dropped pushed commits:
 
