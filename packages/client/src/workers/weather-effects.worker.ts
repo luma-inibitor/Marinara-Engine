@@ -99,8 +99,11 @@ function adoptConfig(nextConfig: WeatherRenderConfig, nextMoonPhase: number) {
   }
 }
 
+// No `hidden` check here: scheduleFrame() already refuses to run the loop while
+// suspended, so this only ever blocked the two callers that must paint — init,
+// and the resize below, whose canvas has just been cleared by its own resize.
 function drawFrame(now: number, advanceSimulation = true) {
-  if (!context || !config || hidden) {
+  if (!context || !config) {
     previousTime = now;
     return;
   }
