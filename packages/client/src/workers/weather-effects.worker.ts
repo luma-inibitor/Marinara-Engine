@@ -71,8 +71,11 @@ function resizeSurface(nextWidth: number, nextHeight: number, nextScale: number)
   context.setTransform(scale, 0, 0, scale, 0, 0);
 }
 
+// No `hidden` check here: scheduleFrame() already refuses to run the loop while
+// suspended, so this only ever blocked the two callers that must paint — init,
+// and the resize below, whose canvas has just been cleared by its own resize.
 function drawFrame(now: number, advanceSimulation = true) {
-  if (!context || !config || hidden) {
+  if (!context || !config) {
     previousTime = now;
     return;
   }
