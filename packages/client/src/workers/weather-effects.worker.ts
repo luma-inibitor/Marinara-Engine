@@ -71,8 +71,16 @@ function resizeSurface(nextWidth: number, nextHeight: number, nextScale: number)
   context.setTransform(scale, 0, 0, scale, 0, 0);
 }
 
-function drawFrame(now: number, advanceSimulation = true) {
-  if (!context || !config || hidden) {
+type DrawFrameOptions = {
+  /** Move particles / celestial animation forward. Off for static repaints. */
+  advanceSimulation?: boolean;
+  /** Repaint even while suspended — used to restore a cleared canvas. */
+  whileSuspended?: boolean;
+};
+
+function drawFrame(now: number, options: DrawFrameOptions = {}) {
+  const { advanceSimulation = true, whileSuspended = false } = options;
+  if (!context || !config || (hidden && !whileSuspended)) {
     previousTime = now;
     return;
   }
@@ -193,7 +201,11 @@ self.onmessage = (event: MessageEvent<WeatherWorkerMessage>) => {
     resizeSurface(message.width, message.height, message.scale);
     // Resizing a canvas clears it. Repaint in the same worker task so the
     // browser never presents a blank weather layer between sidebar layouts.
-    drawFrame(performance.now(), false);
+    // This has to run while suspended too: focusing the mobile composer
+    // suspends ambient rendering, and the software keyboard that opens right
+    // after resizes the layout viewport. Without a forced repaint the cleared
+    // canvas would stay blank for as long as the keyboard is up.
+    drawFrame(performance.now(), { advanceSimulation: false, whileSuspended: true });
   } else {
     setSuspended(message.hidden);
   }

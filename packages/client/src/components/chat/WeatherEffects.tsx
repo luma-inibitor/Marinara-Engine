@@ -155,67 +155,23 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
     let accumulatedFrameTime = 0;
 
     let canvasScale = 1;
-    const resize = () => {
-      const rect = canvas.parentElement?.getBoundingClientRect();
-      if (!rect || rect.width <= 0 || rect.height <= 0) return;
-      const pixelBudgetScale = Math.sqrt(MAX_CANVAS_PIXELS / (rect.width * rect.height));
-      canvasScale = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR, pixelBudgetScale);
-      canvas.width = Math.max(1, Math.round(rect.width * canvasScale));
-      canvas.height = Math.max(1, Math.round(rect.height * canvasScale));
-      ctx.setTransform(canvasScale, 0, 0, canvasScale, 0, 0);
-    };
-    resize();
-    window.addEventListener("resize", resize);
 
-    // Initialize particles — use CSS pixel dimensions (not canvas resolution)
-    particlesRef.current = [];
-    const w = canvas.width / canvasScale;
-    const h = canvas.height / canvasScale;
+    // Draws one frame at the current canvas size. `frameScale` of 0 repaints
+    // the frozen scene without advancing the simulation.
+    const renderFrame = (frameScale: number) => {
+      const cw = canvas.width / canvasScale;
+      const ch = canvas.height / canvasScale;
 
-    for (let i = 0; i < config.count; i++) {
-      particlesRef.current.push(createWeatherParticle(config.type, w, h));
-    }
-    if (config.addFireflies) {
-      for (let i = 0; i < FIREFLY_COUNT; i++) {
-        particlesRef.current.push(createWeatherParticle("firefly", w, h));
-      }
-    }
-    if (config.addStars) {
-      for (let i = 0; i < STAR_COUNT; i++) {
-        particlesRef.current.push(createWeatherParticle("star", w, h));
-      }
-    }
-
-    const tick = (timestamp: number) => {
-      if (!running) return;
-      if (document.hidden || pausedRef.current) {
-        previousFrameTime = timestamp;
-        accumulatedFrameTime = 0;
-        frameRef.current = 0;
-        return;
-      }
-
-      if (previousFrameTime === 0) previousFrameTime = timestamp;
-      const elapsed = Math.min(100, timestamp - previousFrameTime);
-      previousFrameTime = timestamp;
-      const frameStep = advanceWeatherFrameClock(accumulatedFrameTime, elapsed);
-      accumulatedFrameTime = frameStep.accumulatedMs;
-      if (!frameStep.shouldDraw) {
-        frameRef.current = requestAnimationFrame(tick);
-        return;
-      }
-      const frameScale = Math.min(3, Math.max(0.5, frameStep.frameElapsedMs / BASE_FRAME_MS));
-
-      ctx.clearRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
+      ctx.clearRect(0, 0, cw, ch);
 
       // Draw ambient overlay tint
       if (config.tint) {
         ctx.fillStyle = config.tint;
-        ctx.fillRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
+        ctx.fillRect(0, 0, cw, ch);
       }
       if (config.overlay) {
         ctx.fillStyle = config.overlay;
-        ctx.fillRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
+        ctx.fillRect(0, 0, cw, ch);
       }
 
       // Lightning flash (epilepsy-safe: capped alpha, gentle decay, long gap between flashes)
@@ -227,15 +183,13 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
         }
         if (lightningAlpha > 0) {
           ctx.fillStyle = `rgba(220,230,255,${lightningAlpha})`;
-          ctx.fillRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
+          ctx.fillRect(0, 0, cw, ch);
           lightningAlpha *= Math.pow(0.88, frameScale); // gentle decay
           if (lightningAlpha < 0.01) lightningAlpha = 0;
         }
       }
 
       // ── Celestial bodies (sun / moon) ──
-      const cw = canvas.width / canvasScale;
-      const ch = canvas.height / canvasScale;
       if (shouldDrawCelestial && config.isClearSky) {
         const bodyRadius = Math.min(cw, ch) * 0.035; // ~3.5% of smallest dimension
         const hour = config.hour >= 0 ? config.hour : 12;
@@ -286,6 +240,65 @@ export function WeatherEffects({ weather, timeOfDay, showCelestial = true, pause
           particles[i] = createWeatherParticle(p.type, cw, ch, true);
         }
       }
+    };
+
+    const resize = () => {
+      const rect = canvas.parentElement?.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      const pixelBudgetScale = Math.sqrt(MAX_CANVAS_PIXELS / (rect.width * rect.height));
+      canvasScale = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR, pixelBudgetScale);
+      canvas.width = Math.max(1, Math.round(rect.width * canvasScale));
+      canvas.height = Math.max(1, Math.round(rect.height * canvasScale));
+      ctx.setTransform(canvasScale, 0, 0, canvasScale, 0, 0);
+      // Assigning width/height clears the canvas, and the animation loop is
+      // stopped while paused — which is exactly the state the mobile composer
+      // puts us in as the software keyboard opens and resizes the viewport.
+      // Repaint the frozen scene here so the layer never goes blank.
+      renderFrame(0);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+
+    // Initialize particles — use CSS pixel dimensions (not canvas resolution)
+    particlesRef.current = [];
+    const w = canvas.width / canvasScale;
+    const h = canvas.height / canvasScale;
+
+    for (let i = 0; i < config.count; i++) {
+      particlesRef.current.push(createWeatherParticle(config.type, w, h));
+    }
+    if (config.addFireflies) {
+      for (let i = 0; i < FIREFLY_COUNT; i++) {
+        particlesRef.current.push(createWeatherParticle("firefly", w, h));
+      }
+    }
+    if (config.addStars) {
+      for (let i = 0; i < STAR_COUNT; i++) {
+        particlesRef.current.push(createWeatherParticle("star", w, h));
+      }
+    }
+
+    const tick = (timestamp: number) => {
+      if (!running) return;
+      if (document.hidden || pausedRef.current) {
+        previousFrameTime = timestamp;
+        accumulatedFrameTime = 0;
+        frameRef.current = 0;
+        return;
+      }
+
+      if (previousFrameTime === 0) previousFrameTime = timestamp;
+      const elapsed = Math.min(100, timestamp - previousFrameTime);
+      previousFrameTime = timestamp;
+      const frameStep = advanceWeatherFrameClock(accumulatedFrameTime, elapsed);
+      accumulatedFrameTime = frameStep.accumulatedMs;
+      if (!frameStep.shouldDraw) {
+        frameRef.current = requestAnimationFrame(tick);
+        return;
+      }
+      const frameScale = Math.min(3, Math.max(0.5, frameStep.frameElapsedMs / BASE_FRAME_MS));
+
+      renderFrame(frameScale);
 
       frameRef.current = requestAnimationFrame(tick);
     };
