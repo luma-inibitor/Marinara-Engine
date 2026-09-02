@@ -9,5 +9,8 @@ patch/mari-unsandboxed-shell
 patch/capability-relink-node-modules
 patch/fork-upstream-diagnostics
 patch/ambient-sky
+# Must stay after patch/ambient-sky: same files, and applying the fix last
+# makes a lost hunk a loud conflict instead of a silent regression.
+patch/weather-resize-repaint
 patch/impersonate-copy-button
 patch/fork-tooling
