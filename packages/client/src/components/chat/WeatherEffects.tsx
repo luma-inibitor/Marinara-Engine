@@ -370,8 +370,12 @@ export function WeatherEffects({
       if (!running || document.hidden || pausedRef.current || frameRef.current !== 0) return;
       if (resizePending) {
         resize();
+        const cw = canvas.width / canvasScale;
+        const ch = canvas.height / canvasScale;
         particlesRef.current = particlesRef.current.map((particle) =>
-          createWeatherParticle(particle.type, canvas.width / canvasScale, canvas.height / canvasScale),
+          particle.type === "firefly"
+            ? createWeatherParticle("firefly", cw, ch)
+            : createWeatherParticle(particle.type, cw, ch, false, tuningRef.current),
         );
       }
       frameRef.current = requestAnimationFrame(tick);
