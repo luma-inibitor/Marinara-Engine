@@ -3,11 +3,37 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
+import { advanceWeatherFrameClock } from "../../packages/client/src/lib/weather-frame-clock.js";
+import * as weatherRenderer from "../../packages/client/src/lib/weather-renderer.js";
 import {
+  clampWeatherTuning,
   createWeatherParticle,
+  DEFAULT_WEATHER_TUNING,
+  effectiveParticleCount,
   resolveWeatherRenderConfig,
   type WeatherParticle,
 } from "../../packages/client/src/lib/weather-renderer.js";
+
+// The ambient-sky renderer builds scratch canvases (star fields, cloud sprites)
+// through OffscreenCanvas, which Node lacks. Their draws must stay silent so
+// they never count as repaints of the visible canvas.
+class OffscreenCanvasStub {
+  width: number;
+  height: number;
+  constructor(width = 0, height = 0) {
+    this.width = width;
+    this.height = height;
+  }
+  getContext() {
+    return new Proxy({} as Record<string, unknown>, {
+      get(target, key: string) {
+        if (key in target) return target[key];
+        return () => (key.startsWith("create") ? { addColorStop() {} } : undefined);
+      },
+    });
+  }
+}
+(globalThis as Record<string, unknown>).OffscreenCanvas ??= OffscreenCanvasStub;
 
 let drawCalls = 0;
 const context = new Proxy({} as Record<string, unknown>, {
@@ -67,7 +93,7 @@ assert.match(
 );
 // Execute the component's fallback lifecycle with browser boundaries stubbed.
 const fallbackStart = fallback.indexOf('    const ctx = canvas.getContext("2d");');
-const fallbackEnd = fallback.indexOf("  }, [config, shouldDrawCelestial");
+const fallbackEnd = fallback.indexOf("  }, [shouldRender, showCelestial, workerFailed]);");
 assert.ok(fallbackStart >= 0 && fallbackEnd > fallbackStart, "fallback lifecycle remains extractable");
 const constants = fallback.slice(
   fallback.indexOf("const MAX_CANVAS_DPR"),
@@ -82,8 +108,13 @@ for (const suspendedBy of ["paused", "hidden"]) {
     const width = 1920 / scale;
     const height = 1080 / scale;
     const creationSizes: Array<[number, number]> = [];
+    const creationTunings: unknown[] = [];
     let scheduledFrames = 0;
+    const config = resolveWeatherRenderConfig("clear", "night");
+    const tuning = clampWeatherTuning({ ...DEFAULT_WEATHER_TUNING, snowSize: 1.5, rainSpeed: 0.5 });
     const sandbox = {
+      ...weatherRenderer,
+      advanceWeatherFrameClock,
       canvas: {
         width: 300,
         height: 150,
@@ -96,9 +127,13 @@ for (const suspendedBy of ["paused", "hidden"]) {
       particlesRef: { current: [] as WeatherParticle[] },
       frameRef: { current: 0 },
       resumeFallbackRef: { current: null as (() => void) | null },
-      config: resolveWeatherRenderConfig("clear", "night"),
+      config,
+      configRef: { current: config },
+      moonPhaseRef: { current: 0.5 },
+      tuningRef: { current: tuning },
       createWeatherParticle: (...args: Parameters<typeof createWeatherParticle>) => {
         creationSizes.push([args[1], args[2]]);
+        if (args[0] !== "firefly") creationTunings.push(args[4]);
         return createWeatherParticle(...args);
       },
       requestAnimationFrame: () => ++scheduledFrames,
@@ -108,7 +143,11 @@ for (const suspendedBy of ["paused", "hidden"]) {
     try {
       const initialParticles = sandbox.particlesRef.current;
       const initialTypes = Array.from(initialParticles, (particle) => particle.type);
-      assert.equal(initialParticles.length, sandbox.config.count + 10 + 18, "all configured particle types initialize");
+      assert.equal(
+        initialParticles.length,
+        effectiveParticleCount(config, tuning) + (config.addFireflies ? 10 : 0),
+        "all configured particle types initialize",
+      );
       assert.ok(
         creationSizes.every(([w, h]) => w === 300 && h === 150),
         "suspended mount uses the default bitmap",
@@ -137,7 +176,11 @@ for (const suspendedBy of ["paused", "hidden"]) {
       assert.deepEqual(
         Array.from(sandbox.particlesRef.current, (particle) => particle.type),
         initialTypes,
-        "resize preserves particle type order and counts, including fireflies and stars",
+        "resize preserves particle type order and counts, including fireflies",
+      );
+      assert.ok(
+        creationTunings.length > 0 && creationTunings.every((used) => used === tuning),
+        "recreated weather particles keep the user's effect tuning",
       );
       assert.ok(
         sandbox.particlesRef.current.every((particle, index) => particle !== initialParticles[index]),
