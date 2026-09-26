@@ -104,17 +104,28 @@ git push --force-with-lease --force-if-includes origin luma/staging
 
 ## Adding a new patch
 
-```sh
-git checkout -B patch/<short-topic> staging  # branch from the pristine mirror
-# ...make the change, commit it...
-git push -u origin patch/<short-topic>
-```
+A new patch goes straight into `luma/staging` in one pass, with no review PR and no stop between steps:
 
-Then add it to `tools/fork/patches.list` (before `patch/fork-tooling`), document it in [`PATCHES.md`](./PATCHES.md), and rebuild:
+1. Branch from the pristine mirror, make the change, validate it, and push it:
 
-```sh
-tools/fork/apply-patches.sh --check
-```
+   ```sh
+   git checkout -B patch/<short-topic> staging
+   # ...make the change, commit it...
+   pnpm install && pnpm check    # plus any regression lane the change touches
+   git push -u origin patch/<short-topic>
+   ```
+
+2. On `patch/fork-tooling`, add the branch to `tools/fork/patches.list` (before `patch/fork-tooling`, which stays last) and add its section to [`PATCHES.md`](./PATCHES.md). Commit it.
+
+3. Rebuild `luma/staging` on the current base, then run the push commands the script prints:
+
+   ```sh
+   tools/fork/apply-patches.sh --base origin/staging --check
+   ```
+
+   `--base origin/staging` keeps the base where the last sync left it, so adding a patch does not also pull in new upstream commits. Leave `--base` off to do a full upstream sync at the same time.
+
+4. Report the patch name, what it changes, and that the device picks it up on its next pull and restart.
 
 <details>
 <summary>Or fold it in by hand</summary>
@@ -124,6 +135,8 @@ git checkout luma/staging
 git cherry-pick patch/<short-topic>   # or rebase/cherry-pick if it needs to sit on other patches
 git push --force-with-lease origin luma/staging
 ```
+
+The `patches.list` and `PATCHES.md` entries are still required, or the next sync drops the patch.
 
 </details>
 
