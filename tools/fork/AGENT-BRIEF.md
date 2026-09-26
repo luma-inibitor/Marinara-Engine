@@ -34,15 +34,15 @@ git fetch upstream
 - **Syncs and in-flight work must not overwrite each other.** If you run a sync: `git fetch origin --prune` immediately before rebuilding, and never force-push a `patch/*` branch whose origin tip you have not integrated (the sync script enforces both; push with `--force-with-lease --force-if-includes`). If a sync moves branches under _you_ mid-session: fetch, then cherry-pick your commits onto the moved refs — never force-push your old history back over the sync.
 - **A hotfix cherry-picked straight onto `luma/staging` must also land on its owning `patch/*` branch** before the next sync, or the rebuild will flag it (and, with `--skip-audit`, drop it). The patch branches are the source of truth; the integration branch is a build product.
 
-When the patch is done:
+When the patch is done, carry it into `luma/staging` in the same pass, with no PR and no stop to ask (full steps in `FORK.md` § Adding a new patch):
 
-1. Add the branch to `tools/fork/patches.list` (before `patch/fork-tooling`, which stays last).
-2. Add a section to `PATCHES.md`: what it does, why it's forked, upstream status, files touched.
-3. Rebuild and validate the integration branch:
+1. Push the patch branch.
+2. On `patch/fork-tooling`, add the branch to `tools/fork/patches.list` (before `patch/fork-tooling`, which stays last) and add a section to `PATCHES.md`: what it does, why it's forked, upstream status, files touched.
+3. Rebuild, validate and push the integration branch:
    ```sh
-   tools/fork/apply-patches.sh --check
+   tools/fork/apply-patches.sh --base origin/staging --check
    ```
-   It rebases the queue and rebuilds `luma/staging`. It pushes nothing — it prints the push commands. Run `tools/fork/apply-patches.sh --help` for flags.
+   It rebases the queue and rebuilds `luma/staging` on the current base. It pushes nothing itself; run the push commands it prints. Run `tools/fork/apply-patches.sh --help` for flags.
 
 ## Validating
 
@@ -76,7 +76,7 @@ Seeding conversation/roleplay needs no connection; the game fixture needs a conn
 
 ## Guardrails
 
-- **Don't open a PR unless I ask.** Push the patch branch; tell me what you'd put in the PR.
+- **Don't open a PR for a patch.** Patches land in `luma/staging` directly (see above). Open a PR only when I ask for one.
 - Never auto-check validation or test-plan checkboxes — those are mine to tick.
 - Server code uses the shared Pino logger, never `console.*`; client code keeps `console.*`. See `CLAUDE.md § Logging`.
 - Don't revert or "clean up" unrelated work in the tree.
