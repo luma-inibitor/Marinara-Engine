@@ -51,6 +51,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Staging rebase note (2.4.6):** upstream regrouped Settings → Appearance and reindented the whole section, and rewrote `ui.store.ts` around it, so the third commit conflicted in both files. Resolution: take upstream's files and reapply the commit's additions by hand. The knob grid sits after the weather-effects toggle's help text inside the Atmosphere section, and `weatherTuning` goes into the interface, the actions, both persisted-state pickers, the initial state, and the Reset Appearance defaults (new on this sync, so Reset Appearance also resets the knobs).
 - **Touches:** `packages/client/src/lib/weather-renderer.ts`, `packages/client/src/components/chat/WeatherEffects.tsx`, `packages/client/src/components/chat/ChatRoleplaySurface.tsx`, `packages/client/src/workers/weather-effects.worker.ts`, `packages/client/src/components/panels/SettingsPanel.tsx`, `packages/client/src/stores/ui.store.ts`, `packages/client/src/localization/locales/en.json`, `scripts/regressions/ambient-sky.regression.ts` (auto-discovered by `scripts/run-regressions.mjs`; no `package.json` change). It also edits upstream's `scripts/regressions/weather-effects-suspended-repaint.regression.ts`.
 
+### `patch/game-widget-tags-persist`
+
+- **What:** Saves the GM's `[widget: ...]` HUD tags to the chat. The tag path in `GameSurface.tsx` applied each update to the HUD store and the cached chat only, so the next chat refetch put the stale server copy back, and the GM prompt, which reads `gameWidgetState` from the server, never saw its own checklist, gauge or stat changes. The tag path now calls `useUpdateGameWidgets()`, the mutation the widget editor already uses: it PUTs `/game/:chatId/widgets` and registers the pending write so hydration does not overwrite it. The local-only `syncHudWidgetsToChatCache` helper is removed.
+- **Why forked:** Found in a live game chat whose checklist never kept a GM update across four turns. Upstream has the same code.
+- **Upstream status:** Not yet submitted (candidate). Upstream bug, self-contained, one file.
+- **Note:** the widgets PUT enforces the 4-widget cap. A chat whose `gameWidgetState` holds more than 4 (only reachable by writing metadata directly) gets a 400 on every GM widget update until it is trimmed.
+- **Touches:** `packages/client/src/components/game/GameSurface.tsx`.
+
 ## Retired patches
 
 ### `patch/store-hash-join` — retired on the 2026-09-23 sync
