@@ -129,6 +129,7 @@ import {
   useUpdateWeather,
   useUpdateReputation,
   useTransitionGameState,
+  useUpdateGameWidgets,
   useRecruitPartyMember,
   useRegenerateCharacterSheet,
   useRemovePartyMember,
@@ -4219,6 +4220,7 @@ function GameSurfaceComponent({
   const updateWeather = useUpdateWeather();
   const _updateReputation = useUpdateReputation();
   const transitionGameState = useTransitionGameState();
+  const updateGameWidgets = useUpdateGameWidgets();
   const sceneAnalysis = useSceneAnalysis();
   const sidecarConfig = useSidecarStore((s) => s.config);
   const sidecarReady = useSidecarStore((s) => s.inferenceReady);
@@ -5563,7 +5565,7 @@ function GameSurfaceComponent({
       nextWidgetState = applyWidgetUpdate(wu);
     }
     if (nextWidgetState) {
-      syncHudWidgetsToChatCache(nextWidgetState);
+      updateGameWidgets.mutate({ chatId: activeChatId, widgets: nextWidgetState });
     }
 
     // State change tags always come from the GM model — transition via server so
