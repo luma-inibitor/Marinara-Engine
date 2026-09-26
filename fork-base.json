@@ -1,0 +1,13 @@
+{
+  "baseRef": "origin/staging",
+  "baseCommit": "fca85b30d2a14ba6d1702a2d3595e5e3281ef7e4",
+  "baseBranch": "staging",
+  "patches": {
+    "patch/mari-unsandboxed-shell": "6e426e2d3d7f5aa1f28a75e67a5cb91e2467566c",
+    "patch/capability-relink-node-modules": "6b6987fe2a7d00cf412ab0bb7a250bdf5f4c735c",
+    "patch/fork-upstream-diagnostics": "06622dc68ae4b05b12b5ffb24c8a773fd85a6e3f",
+    "patch/ambient-sky": "c66b5607c7399ff0b64445bea0bb38c6abac8a02",
+    "patch/game-widget-tags-persist": "7f201ebfc490c5a2eaac1a1cddccd49d4f7aac98",
+    "patch/fork-tooling": "bb0a43528821199e55ea95196ca84e9fa4d28957"
+  }
+}
