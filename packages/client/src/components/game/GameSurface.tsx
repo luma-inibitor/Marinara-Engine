@@ -52,11 +52,11 @@ import {
   useUpdateWeather,
   useUpdateReputation,
   useTransitionGameState,
+  useUpdateGameWidgets,
   useRecruitPartyMember,
   useRegenerateCharacterSheet,
   useRemovePartyMember,
   gameKeys,
-  patchChatMetadata,
 } from "../../hooks/use-game";
 import {
   gameStoryboardKeys,
@@ -2663,24 +2663,6 @@ function GameSurfaceComponent({
 
   // Asset store
   const queryClient = useQueryClient();
-  const syncHudWidgetsToChatCache = useCallback(
-    (widgets: HudWidget[]) => {
-      const detailKey = chatKeys.detail(activeChatId);
-      const patchedChat = patchChatMetadata(queryClient.getQueryData<Chat>(detailKey), { gameWidgetState: widgets });
-      if (patchedChat) {
-        queryClient.setQueryData(detailKey, patchedChat);
-      }
-
-      const chatStore = useChatStore.getState();
-      if (chatStore.activeChatId === activeChatId) {
-        const patchedActiveChat = patchChatMetadata(chatStore.activeChat, { gameWidgetState: widgets });
-        if (patchedActiveChat) {
-          chatStore.setActiveChat(patchedActiveChat);
-        }
-      }
-    },
-    [activeChatId, queryClient],
-  );
   const { data: assetManifest, refetch: fetchManifest } = useGameAssetManifest();
   const generatedAudioAssetsRef = useRef<Record<string, GameAssetEntry>>({});
   // Session dedup for context-track generation requests (#5161), keyed `${axis}\0${key}`.
@@ -3945,6 +3927,7 @@ function GameSurfaceComponent({
   const updateWeather = useUpdateWeather();
   const _updateReputation = useUpdateReputation();
   const transitionGameState = useTransitionGameState();
+  const updateGameWidgets = useUpdateGameWidgets();
   const sceneAnalysis = useSceneAnalysis();
   const sidecarConfig = useSidecarStore((s) => s.config);
   const sidecarReady = useSidecarStore((s) => s.inferenceReady);
@@ -5226,7 +5209,7 @@ function GameSurfaceComponent({
       nextWidgetState = applyWidgetUpdate(wu);
     }
     if (nextWidgetState) {
-      syncHudWidgetsToChatCache(nextWidgetState);
+      updateGameWidgets.mutate({ chatId: activeChatId, widgets: nextWidgetState });
     }
 
     // State change tags always come from the GM model — transition via server so
