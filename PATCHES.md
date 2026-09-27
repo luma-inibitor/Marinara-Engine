@@ -59,6 +59,13 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Note:** the widgets PUT enforces the 4-widget cap. A chat whose `gameWidgetState` holds more than 4 (only reachable by writing metadata directly) gets a 400 on every GM widget update until it is trimmed.
 - **Touches:** `packages/client/src/components/game/GameSurface.tsx`.
 
+### `patch/game-weather-during-generation`
+
+- **What:** Keeps game-mode weather animating while the GM writes. `GameSurface.tsx` passed `paused={isStreaming || scenePreparing || sceneAnalysis.isPending || agentsProcessing}` to `WeatherEffects`, so rain and snow froze for every GM turn and agent run. It now passes `paused={sceneAnalysis.isPending}`, since scene analysis can run on the on-device sidecar model. The `roleplay-streaming` regression assertion that required the old pause is updated to match.
+- **Why forked:** Upstream added the generation pause to both modes in #4193 to free the GPU for local text generation, then dropped it for roleplay weather in `a6a0c6d95`. Game mode kept it. On this device the GM and agents are remote API calls and weather renders in a worker on an OffscreenCanvas, so the freeze bought nothing and made every turn look stalled.
+- **Upstream status:** Not yet submitted. Upstream asserts the old behavior in a regression, so it is a deliberate choice there.
+- **Touches:** `packages/client/src/components/game/GameSurface.tsx`, `scripts/regressions/roleplay-streaming.regression.ts`.
+
 ## Retired patches
 
 ### `patch/store-hash-join` — retired on the 2026-09-23 sync
