@@ -1074,8 +1074,8 @@ assert.match(
 );
 assert.match(
   gameSurfaceSource,
-  /paused=\{isStreaming \|\| scenePreparing \|\| sceneAnalysis\.isPending \|\| agentsProcessing\}/u,
-  "Game weather should remain paused through background agent work",
+  /paused=\{sceneAnalysis\.isPending\}/u,
+  "Game weather should keep animating through GM and agent generation, pausing only for scene analysis",
 );
 assert.match(
   weatherEffectsSource,
