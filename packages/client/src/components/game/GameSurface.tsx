@@ -13331,7 +13331,7 @@ function GameSurfaceComponent({
                           weather={gameSnapshot?.weather ?? null}
                           timeOfDay={gameSnapshot?.time ?? metaTime ?? null}
                           showCelestial={false}
-                          paused={isStreaming || scenePreparing || sceneAnalysis.isPending || agentsProcessing}
+                          paused={sceneAnalysis.isPending}
                         />
                       </div>
                     )}
