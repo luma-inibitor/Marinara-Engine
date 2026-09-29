@@ -57,6 +57,7 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Why forked:** Found in a live game chat whose checklist never kept a GM update across four turns. Upstream has the same code.
 - **Upstream status:** Not yet submitted (candidate). Upstream bug, self-contained, one file.
 - **Note:** the widgets PUT enforces the 4-widget cap. A chat whose `gameWidgetState` holds more than 4 (only reachable by writing metadata directly) gets a 400 on every GM widget update until it is trimmed.
+- **Staging rebase note (82d8d68f2):** the patch dropped the `patchChatMetadata` import along with the cache-only widget sync it replaced. Upstream now imports it for a new inventory cache sync in the same file, so the import stays.
 - **Touches:** `packages/client/src/components/game/GameSurface.tsx`.
 
 ### `patch/game-weather-during-generation`
