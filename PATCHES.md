@@ -22,6 +22,7 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Why forked:** A support ticket filed from this fork was indistinguishable from one filed against stock upstream — the version, build, and commit all described our build, with nothing naming the upstream release it was built from. Whoever reads the ticket needs both.
 - **Upstream status:** Not submitted. Written to be upstream-offerable — it is generic fork-detection with no reference to this fork, and everything it adds is omitted entirely when the checkout carries no local commits, so stock output is byte-for-byte unchanged. Worth offering if upstream wants it.
 - **Pairs with:** `patch/fork-tooling`, which writes the `fork-base.json` stamp onto the integration branch. The two are independent — the patch falls back to the merge-base search when the stamp is absent, and the stamp is inert without the patch.
+- **Staging rebase note (2.5.0):** upstream rewrote `packages/server/scripts/write-build-meta.mjs` into exported `writeBuildMeta({ failed })` and `findChangedBuildFile()` functions. The build script calls the first; `run-server.mjs` imports the second at startup to find a damaged build (#6984). Both commits conflicted there. Resolution: take upstream's file and add the patch's `git()` helper, the fork-base resolution, and a `fork` field in the JSON that `writeBuildMeta()` writes. The git calls run only inside `writeBuildMeta()`, so the startup import does not run them.
 - **Touches:** `packages/server/src/config/build-info.ts`, `packages/server/scripts/write-build-meta.mjs`, `packages/server/src/app.ts`, `packages/client/src/lib/support-diagnostics.ts`, `packages/client/src/components/panels/SettingsPanel.tsx`, `packages/client/src/localization/locales/en.json`, `scripts/regressions/open-issues.regression.ts`.
 
 ### `patch/fork-tooling`
@@ -73,6 +74,7 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Why forked:** Upstream added the pause in `25dd04fb9` (2026-08-03) so text input would not compete with rendering for device resources. On this device weather renders in a worker on an OffscreenCanvas, so the freeze bought little and made the scene look stalled while typing. The retired `patch/weather-resize-repaint` fixed a different symptom: the layer vanished when the keyboard opened. With that fix upstream, the layer stayed visible but frozen.
 - **Upstream status:** Not yet submitted. Upstream asserts the old behavior in a regression, so it is a deliberate choice there.
 - **Validation:** `pnpm check`, `node ./scripts/run-regressions.mjs --filter scripts/regressions/roleplay-streaming.regression.ts`. Typing smoothness with live weather still needs checking on the Pixel.
+- **Staging rebase note (2.5.0):** upstream moved the author-notes callbacks that sat after `weatherEffectsPaused`, so the hunk conflicted. Resolution: take upstream's lines without the `weatherEffectsPaused` line.
 - **Touches:** `packages/client/src/components/chat/ChatRoleplaySurface.tsx`, `scripts/regressions/roleplay-streaming.regression.ts`.
 
 ## Retired patches
