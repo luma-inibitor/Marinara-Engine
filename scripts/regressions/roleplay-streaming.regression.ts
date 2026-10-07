@@ -631,8 +631,8 @@ assert.match(
 );
 assert.match(
   chatRoleplaySurfaceSource,
-  /WeatherEffectsConnected paused=\{weatherEffectsPaused\}/u,
-  "weather effects should keep animating while tracker agents generate",
+  /WeatherEffectsConnected paused=\{false\}/u,
+  "weather effects should keep animating while tracker agents generate and while the mobile keyboard is open",
 );
 assert.doesNotMatch(
   chatRoleplaySurfaceSource,
@@ -1062,10 +1062,10 @@ assert.match(
   /ambientVisualsPaused && "mari-generation-render-paused"/u,
   "Roleplay should reuse the ambient-render pause for mobile input and generation",
 );
-assert.match(
+assert.doesNotMatch(
   chatRoleplaySurfaceSource,
-  /const weatherEffectsPaused =\s+isMobileToolbarViewport && \(keyboardOpen \|\| composerFocused \|\| hasMobileDraftInput\)/u,
-  "mobile text input should suspend Roleplay weather rendering instead of competing for device resources",
+  /const weatherEffectsPaused =/u,
+  "mobile text input must not freeze Roleplay weather; the layer renders in a worker on an OffscreenCanvas",
 );
 assert.match(
   gameSurfaceSource,
