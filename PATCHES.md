@@ -67,6 +67,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Upstream status:** Not yet submitted. Upstream asserts the old behavior in a regression, so it is a deliberate choice there.
 - **Touches:** `packages/client/src/components/game/GameSurface.tsx`, `scripts/regressions/roleplay-streaming.regression.ts`.
 
+### `patch/rp-weather-while-typing`
+
+- **What:** Keeps roleplay weather animating while the mobile keyboard is open. `ChatRoleplaySurface.tsx` paused `WeatherEffects` on mobile whenever the keyboard was open, the composer had focus, or a draft was waiting (`weatherEffectsPaused`), so the weather froze for as long as you typed. It now passes `paused={false}`. The layer still suspends on its own when the page is hidden. Other ambient visuals keep their mobile-input pause (`ambientVisualsPaused`). The two `roleplay-streaming` regression assertions that required the old pause are updated to match.
+- **Why forked:** Upstream added the pause in `25dd04fb9` (2026-08-03) so text input would not compete with rendering for device resources. On this device weather renders in a worker on an OffscreenCanvas, so the freeze bought little and made the scene look stalled while typing. The retired `patch/weather-resize-repaint` fixed a different symptom: the layer vanished when the keyboard opened. With that fix upstream, the layer stayed visible but frozen.
+- **Upstream status:** Not yet submitted. Upstream asserts the old behavior in a regression, so it is a deliberate choice there.
+- **Validation:** `pnpm check`, `node ./scripts/run-regressions.mjs --filter scripts/regressions/roleplay-streaming.regression.ts`. Typing smoothness with live weather still needs checking on the Pixel.
+- **Touches:** `packages/client/src/components/chat/ChatRoleplaySurface.tsx`, `scripts/regressions/roleplay-streaming.regression.ts`.
+
 ## Retired patches
 
 ### `patch/store-hash-join` — retired on the 2026-09-23 sync
