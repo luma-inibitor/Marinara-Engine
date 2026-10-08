@@ -1740,6 +1740,22 @@ export class OpenAIProvider extends BaseLLMProvider {
     };
   }
 
+  private static withResponseTelemetry(
+    usage: LLMUsage | undefined,
+    payload: Record<string, unknown>,
+    body: Record<string, unknown>,
+  ): LLMUsage | undefined {
+    if (!usage) return usage;
+    const cost = (payload.usage as { cost?: unknown } | undefined)?.cost;
+    return {
+      ...usage,
+      ...(typeof payload.provider === "string" && payload.provider ? { upstreamProvider: payload.provider } : {}),
+      ...(typeof payload.id === "string" && payload.id ? { generationId: payload.id } : {}),
+      ...(typeof cost === "number" && Number.isFinite(cost) ? { costUsd: cost } : {}),
+      ...(typeof body.session_id === "string" && body.session_id ? { sessionId: body.session_id } : {}),
+    };
+  }
+
   /**
    * Whether this model uses "developer" role instead of "system" in Chat Completions.
    * OpenAI GPT-5.x and o-series models use "developer" for system-level instructions.
@@ -2026,9 +2042,10 @@ export class OpenAIProvider extends BaseLLMProvider {
       if (blocks && !reasoning && blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
       const text = blocks ? blocks.text : typeof msg?.content === "string" ? msg.content : "";
       yield prefixEcho.push(text) + prefixEcho.flush() || refusal;
-      const usage = OpenAIProvider.extractChatCompletionsUsage(
-        json.usage as ChatCompletionsUsagePayload | undefined,
-        options,
+      const usage = OpenAIProvider.withResponseTelemetry(
+        OpenAIProvider.extractChatCompletionsUsage(json.usage as ChatCompletionsUsagePayload | undefined, options),
+        json,
+        body,
       );
       const finishReason = choices[0]?.finish_reason;
       return usage && finishReason ? { ...usage, finishReason } : usage;
@@ -2084,9 +2101,10 @@ export class OpenAIProvider extends BaseLLMProvider {
           }
           // Capture usage from the final chunk (OpenAI sends it with stream_options)
           if (parsed.usage) {
-            streamUsage = OpenAIProvider.extractChatCompletionsUsage(
-              parsed.usage as ChatCompletionsUsagePayload,
-              options,
+            streamUsage = OpenAIProvider.withResponseTelemetry(
+              OpenAIProvider.extractChatCompletionsUsage(parsed.usage as ChatCompletionsUsagePayload, options),
+              parsed,
+              body,
             );
           }
           if (!Array.isArray(parsed.choices)) {
@@ -2361,9 +2379,10 @@ export class OpenAIProvider extends BaseLLMProvider {
       if (!resolvedContent && typeof choice?.message?.refusal === "string" && choice.message.refusal) {
         resolvedContent = choice.message.refusal;
       }
-      const usage = OpenAIProvider.extractChatCompletionsUsage(
-        json.usage as ChatCompletionsUsagePayload | undefined,
-        options,
+      const usage = OpenAIProvider.withResponseTelemetry(
+        OpenAIProvider.extractChatCompletionsUsage(json.usage as ChatCompletionsUsagePayload | undefined, options),
+        json,
+        body,
       );
       let toolCalls = OpenAIProvider.normalizeToolCalls(choice?.message?.tool_calls);
       if (toolCalls.length === 0 && blocks?.toolCalls.length) toolCalls = blocks.toolCalls;
@@ -2442,9 +2461,10 @@ export class OpenAIProvider extends BaseLLMProvider {
           }
 
           if (parsed.usage) {
-            streamUsage = OpenAIProvider.extractChatCompletionsUsage(
-              parsed.usage as ChatCompletionsUsagePayload,
-              options,
+            streamUsage = OpenAIProvider.withResponseTelemetry(
+              OpenAIProvider.extractChatCompletionsUsage(parsed.usage as ChatCompletionsUsagePayload, options),
+              parsed,
+              body,
             );
           }
 
