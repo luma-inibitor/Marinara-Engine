@@ -65,6 +65,7 @@ import { customAgentRepositoriesRoutes } from "./custom-agent-repositories.route
 import { personalExtensionsRoutes } from "./personal-extensions.routes.js";
 import { notificationSoundRoutes } from "./notification-sound.routes.js";
 import { libraryFoldersRoutes } from "./library-folders.routes.js";
+import { telemetryRoutes } from "./telemetry.routes.js";
 import { androidLocalAuthRoutes } from "../middleware/android-local-auth.js";
 import { multiplayerRoutes } from "./multiplayer.routes.js";
 import { MultiplayerService, type MultiplayerGameRuntime } from "../services/multiplayer/service.js";
@@ -160,6 +161,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(customAgentRepositoriesRoutes, { prefix: "/api/custom-agent-repositories" });
   await app.register(personalExtensionsRoutes, { prefix: "/api/personal-extensions" });
   await app.register(notificationSoundRoutes, { prefix: "/api/notification-sound" });
+  await app.register(telemetryRoutes, { prefix: "/api/telemetry" });
   if (process.env.MARINARA_LITE !== "true" && process.env.MARINARA_LITE !== "1") {
     await app.register(sidecarRoutes, { prefix: "/api/sidecar" });
   }

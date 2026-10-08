@@ -58,6 +58,7 @@ import { getAgentCallTimeoutMs, getMaxToolRounds, isDebugAgentsEnabled } from ".
 import { logger, logDebugOverride } from "../../lib/logger.js";
 import { failureLevel } from "../../lib/log-context.js";
 import { repairJsonText } from "../../lib/json-repair.js";
+import { appendRequestLog } from "../telemetry/request-telemetry.js";
 import { LOCAL_SIDECAR_MODEL } from "../llm/local-sidecar.js";
 import { normalizeGemma4Delimiters } from "../llm/textual-tool-call-parser.js";
 import { wrapContent } from "../prompt/format-engine.js";
@@ -799,6 +800,20 @@ function emitAgentDebug(context: AgentContext, event: AgentCallDebugEvent): void
       event.response.length,
       event.response,
     );
+  }
+
+  if (event.stage === "response" || event.stage === "retry_response" || event.stage === "error") {
+    void appendRequestLog({
+      ts: new Date(Date.now() - (event.durationMs ?? 0)).toISOString(),
+      chatId: context.chatId,
+      kind: "agent",
+      agentType: event.agentType,
+      model: event.model,
+      promptTokens: event.promptTokens ?? null,
+      durationMs: event.durationMs ?? null,
+      finishReason: event.finishReason ?? null,
+      error: event.stage === "error" ? (event.error ?? "error") : null,
+    });
   }
 
   try {
