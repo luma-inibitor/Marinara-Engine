@@ -157,6 +157,14 @@ export interface LLMUsage {
   rejectedPredictionTokens?: number;
   /** Provider-reported stream finish reason when usage is returned from a streaming generator. */
   finishReason?: "stop" | "tool_calls" | "length" | string;
+  /** Provider that served the request behind a router, e.g. OpenRouter's top-level `provider`. */
+  upstreamProvider?: string;
+  /** Response id, e.g. OpenRouter's `gen-…`. */
+  generationId?: string;
+  /** Provider-reported request cost in USD. */
+  costUsd?: number;
+  /** Session id sent with the request. */
+  sessionId?: string;
 }
 
 /** Result from a non-streaming chat call that may include tool calls */
