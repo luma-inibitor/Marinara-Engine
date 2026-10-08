@@ -9792,6 +9792,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             enabledParameters,
             suppressModelParameters,
             openrouterProvider: conn.openrouterProvider ?? undefined,
+            sessionId: input.chatId,
             onThinking,
             onResponseParts: (parts) => {
               geminiResponseParts = parts;
@@ -9870,6 +9871,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                     suppressModelParameters,
                     onThinking,
                     openrouterProvider: conn.openrouterProvider ?? undefined,
+                    sessionId: input.chatId,
                     encryptedReasoningItems: excludePastReasoning ? undefined : encryptedReasoningItems,
                     onEncryptedReasoning: excludePastReasoning
                       ? undefined

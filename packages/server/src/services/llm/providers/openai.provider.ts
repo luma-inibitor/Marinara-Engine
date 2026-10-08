@@ -1891,6 +1891,11 @@ export class OpenAIProvider extends BaseLLMProvider {
     logger.debug("[OpenAI] Enabling OpenRouter prompt caching for model=%s", options.model);
   }
 
+  private applyOpenRouterSessionId(body: Record<string, unknown>, options: ChatOptions): void {
+    if (!options.sessionId || !this.isOpenRouterEndpoint()) return;
+    body.session_id = options.sessionId.slice(0, 256);
+  }
+
   private supportsGpt5Verbosity(model: string): boolean {
     if (this.isOpenAIChatGPTProvider()) return false;
     return (
@@ -2212,6 +2217,7 @@ export class OpenAIProvider extends BaseLLMProvider {
     }
 
     this.applyOpenRouterPromptCaching(body, options);
+    this.applyOpenRouterSessionId(body, options);
     this.applyServiceTier(body, options);
     this.applyCustomParameters(body, options);
     // Local chat templates may ignore reasoning_effort. Apply this after custom
@@ -2504,6 +2510,7 @@ export class OpenAIProvider extends BaseLLMProvider {
     }
 
     this.applyOpenRouterPromptCaching(body, options);
+    this.applyOpenRouterSessionId(body, options);
     this.applyServiceTier(body, options);
     this.applyCustomParameters(body, options);
     this.enforceLocalInferenceThinkingDisable(body, options, suppressModelParameters);
