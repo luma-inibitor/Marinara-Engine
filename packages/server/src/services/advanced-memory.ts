@@ -3506,6 +3506,12 @@ export function createAdvancedMemoryService(db: DB, { includeExcerptsInStatus = 
       } catch (error) {
         abortIfNeeded(input.signal);
         logger.warn(error, "[advanced-memory] Query embedding failed; using bounded lexical recall");
+        receipt.reasons.push(
+          error instanceof Error &&
+            /timed? ?out|timeout/i.test(`${error.name} ${error.message} ${(error.cause as Error | undefined)?.name}`)
+            ? "query-embedding-timeout"
+            : "query-embedding-failed",
+        );
       }
     }
     const recentEligible = eligible.slice(-20);
