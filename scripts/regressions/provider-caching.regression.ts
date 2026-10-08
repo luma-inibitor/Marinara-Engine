@@ -87,6 +87,17 @@ try {
     }
   });
 
+  await test("OpenRouter requests carry the chat's session id on chat and tool paths", async () => {
+    for (const kind of ["openrouter", "custom", "openai"] as const) {
+      const provider = new OpenAIProvider(`${baseUrl}/proxy/v1`, "test", undefined, undefined, undefined, kind);
+      const options = { model: "z-ai/glm-5.2", sessionId: "chat-123" };
+      await chatUsage(provider, [{ role: "user", content: "Hello" }], { ...options, stream: false });
+      assert.equal(requests.at(-1)?.session_id, kind === "openrouter" ? "chat-123" : undefined);
+      await provider.chatComplete([{ role: "user", content: "Hello" }], { ...options, stream: false, tools: [tool] });
+      assert.equal(requests.at(-1)?.session_id, kind === "openrouter" ? "chat-123" : undefined);
+    }
+  });
+
   await test("Gemini cache usage is retained across direct/Vertex, chat/tools and buffered/streaming paths", async () => {
     for (const kind of ["google", "google_vertex"] as const) {
       const provider = new GoogleProvider(`${baseUrl}/google`, "test", undefined, undefined, undefined, kind);
