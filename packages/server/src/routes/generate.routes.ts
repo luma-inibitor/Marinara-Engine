@@ -876,6 +876,13 @@ import { clampGenerationMaxOutputTokens } from "../services/generation/output-to
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { withConnectionFallbackProvider } from "../services/llm/connection-fallback-provider.js";
 import {
+  appendRequestLog,
+  generationRequestKind,
+  hashPreset,
+  RequestTelemetryRecorder,
+  withRequestTelemetry,
+} from "../services/telemetry/request-telemetry.js";
+import {
   fitMessagesForModelAccess,
   mergeModelContextLimit,
   resolveModelAccessPolicy,
@@ -1766,6 +1773,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
     const outputTranslationConfig =
       chatMeta.autoTranslate === true ? getChatTranslationConfig(input.chatId, chatMeta) : null;
     let translationAfterFailure = false;
+    let requestTelemetry: RequestTelemetryRecorder | null = null;
     const dispatchAutomaticTranslations = (afterGenerationFailure = false) => {
       // Translation survives a passive disconnect but owns no SSE or generation
       // lock: a slow translation must not prevent the user from sending again.
@@ -2530,6 +2538,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
       let presetId: string | undefined;
       let resolvedPreset: Awaited<ReturnType<typeof presets.getById>> | null = null;
       let presetSource: PromptPresetCandidateSource | null = null;
+      let presetHash: string | undefined;
       for (const candidate of presetCandidates) {
         const candidatePreset = await presets.getById(candidate.id);
         if (candidatePreset) {
@@ -3778,6 +3787,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             lorebookDecisions,
           };
 
+          presetHash = hashPreset({ preset, sections, groups, choices: chatChoices });
           const assembled = await assemblePrompt(assemblerInput);
           for (const id of assembled.referencedCharacterIds) referencedCharacterIds.add(id);
           Object.assign(promptMacroContext.variables, assembled.macroVariables);
@@ -4525,10 +4535,21 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           primaryProvider: agentChatProvider,
           provider: runtimeProvider,
         } = providerRuntime;
+        const requestRecorder = new RequestTelemetryRecorder({
+          chatId: input.chatId,
+          kind: generationRequestKind(input),
+          presetId: presetId ?? null,
+          presetHash,
+          origin: () => generationProviderOrigin,
+        });
+        requestTelemetry = requestRecorder;
+        const telemetryProvider = withRequestTelemetry(runtimeProvider, requestRecorder);
         // A defined Game Master intro (1.339) is the game's first message exactly as set: streamed as written.
         const definedIntro = await gameIntroNow();
         const provider =
-          definedIntro?.mode === "defined" ? fixedTextProvider(definedIntro.text, runtimeProvider) : runtimeProvider;
+          definedIntro?.mode === "defined"
+            ? fixedTextProvider(definedIntro.text, telemetryProvider)
+            : telemetryProvider;
         ({
           temperature,
           maxTokens,
@@ -8536,6 +8557,15 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           let advancedMemorySnapshot: AdvancedMemorySnapshot | undefined;
           let advancedPreparedProviderMessages: ChatMessage[] | undefined;
           if (advancedMemoryEnabled) {
+            const recallStartedAt = Date.now();
+            const logRecall = (row: { ok: boolean; error: string | null; resultCount: number | null }) =>
+              void appendRequestLog({
+                ts: new Date(recallStartedAt).toISOString(),
+                chatId: input.chatId,
+                kind: "memory_recall",
+                durationMs: Date.now() - recallStartedAt,
+                ...row,
+              });
             const prepared = await prepareAdvancedMemoryContext({
               service: advancedMemory,
               chatId: input.chatId,
@@ -8565,6 +8595,25 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 sendSseEvent(reply, { type: "advanced_memory_status", data: { chatId: input.chatId, job } }),
               toProviderMessages: (messages) =>
                 prepareProviderMessages(limitPastReasoningMetadata(toProviderMessages(messages), chatMeta)),
+            }).catch((err: unknown) => {
+              logRecall({
+                ok: false,
+                error: generationSignal.aborted
+                  ? "aborted"
+                  : err instanceof Error
+                    ? err.message.slice(0, 500)
+                    : String(err),
+                resultCount: null,
+              });
+              throw err;
+            });
+            const recallFailure = prepared.receipt.reasons.includes("reused-swipe-memory")
+              ? undefined
+              : prepared.receipt.reasons.find((reason) => reason.startsWith("query-embedding-"));
+            logRecall({
+              ok: !recallFailure,
+              error: recallFailure ? recallFailure.slice("query-embedding-".length) : null,
+              resultCount: prepared.receipt.recalledSceneIds.length + prepared.receipt.recalledMessageIds.length,
             });
             advancedPreparedProviderMessages = prepared.providerMessages;
             advancedMemoryReceipt = prepared.receipt;
@@ -10690,6 +10739,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
               data: savedMsg,
             });
           } else if (savedMsg?.id) {
+            const requestSummary = requestRecorder.commit(savedMsg.id, savedSwipeIndex);
             // The world-set market place this turn was at (a ruleset's market where the world put the party
             // and no place tag began a day), saved on the reply so the market day there runs across turns.
             const marketWorldPlace =
@@ -10733,6 +10783,10 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
               encryptedReasoningItems,
               contextInjections,
             });
+            extraUpdate.generationInfo = {
+              ...(extraUpdate.generationInfo as Record<string, unknown>),
+              ...requestSummary,
+            };
             // Continuing extends this swipe; a new or regenerated reply owns a fresh reference snapshot.
             if (
               chatMode === "roleplay" &&
@@ -14798,6 +14852,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           : "Generation failed";
       sendSseEvent(reply, { type: "error", data: message });
     } finally {
+      requestTelemetry?.flush();
       dispatchAutomaticTranslations(translationAfterFailure);
       if (restoredRoleplayInterruption && input.regenerateMessageId) {
         try {
