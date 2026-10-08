@@ -8140,6 +8140,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             enabledParameters,
             suppressModelParameters,
             openrouterProvider: conn.openrouterProvider ?? undefined,
+            sessionId: input.chatId,
             onThinking,
             onResponseParts: (parts) => {
               geminiResponseParts = parts;
@@ -8250,6 +8251,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                       onThinking,
                       onToken: input.streaming ? onToken : undefined,
                       openrouterProvider: conn.openrouterProvider ?? undefined,
+                      sessionId: input.chatId,
                       signal: rollRequestAbort
                         ? AbortSignal.any([generationSignal, rollRequestAbort.signal])
                         : generationSignal,
@@ -8580,6 +8582,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                     onThinking,
                     onToken: input.streaming ? onToken : undefined,
                     openrouterProvider: conn.openrouterProvider ?? undefined,
+                    sessionId: input.chatId,
                     signal: generationSignal,
                     encryptedReasoningItems: excludePastReasoning ? undefined : encryptedReasoningItems,
                     onEncryptedReasoning: excludePastReasoning
