@@ -77,6 +77,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Staging rebase note (2.5.0):** upstream moved the author-notes callbacks that sat after `weatherEffectsPaused`, so the hunk conflicted. Resolution: take upstream's lines without the `weatherEffectsPaused` line.
 - **Touches:** `packages/client/src/components/chat/ChatRoleplaySurface.tsx`, `scripts/regressions/roleplay-streaming.regression.ts`.
 
+### `patch/openrouter-session-id`
+
+- **What:** Sends the chat id as OpenRouter's `session_id` on chat-completions requests. OpenRouter serves a model from many providers, each with its own prompt cache. Without a session id it only sticks a conversation to one provider after it sees a cache hit, so rerolls and new turns land on different providers and miss until one happens to hit. With the session id, a chat's requests go back to the same provider from the first one. Adds `ChatOptions.sessionId`, set to the chat id on the three main generation calls in `generate.routes.ts`, and applied by `OpenAIProvider` only when the endpoint is OpenRouter.
+- **Why forked:** GLM 5.2 rerolls in a live roleplay chat sent an identical 50,710-token prompt and got 0, 0 and 1,600 cached tokens before OpenRouter stuck to a provider, then 50,624 on every later reroll.
+- **Upstream status:** Not yet submitted (candidate). Self-contained and provider-gated.
+- **Validation:** `pnpm check`, `node ./scripts/run-regressions.mjs --filter scripts/regressions/provider-caching.regression.ts` (new case: session id sent on the chat and tool paths for OpenRouter only).
+- **Touches:** `packages/shared/src/types/generation-integration.ts`, `packages/server/src/services/llm/providers/openai.provider.ts`, `packages/server/src/routes/generate.routes.ts`, `scripts/regressions/provider-caching.regression.ts`.
+
 ## Retired patches
 
 ### `patch/store-hash-join` — retired on the 2026-09-23 sync
