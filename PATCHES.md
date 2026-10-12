@@ -94,6 +94,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Validation:** `pnpm check`, `node ./scripts/run-regressions.mjs --filter scripts/regressions/request-telemetry.regression.ts` (OpenRouter metadata on the chat and tool paths, streaming and not, through to the log and the generationInfo summary; a failed request logged with its error; prompt hashes stable and changing only at the edited message). Also the `provider-caching`, `advanced-memory`, `agent-` and `generat` lanes.
 - **Touches:** `packages/shared/src/types/generation-integration.ts`, `packages/server/src/services/llm/providers/openai.provider.ts`, `packages/server/src/services/telemetry/request-telemetry.ts`, `packages/server/src/routes/telemetry.routes.ts`, `packages/server/src/routes/index.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/services/agents/agent-executor.ts`, `packages/server/src/services/advanced-memory.ts`, `scripts/regressions/request-telemetry.regression.ts`.
 
+### `patch/impersonate-regen-group`
+
+- **What:** Regenerating an impersonated message in a group chat set to individual mode failed with "Regenerated message is missing character". The individual regen path in `generate.routes.ts` requires the regenerated message to belong to a character, and an impersonation is the user's own message with no `characterId`. A fresh impersonation already skips the individual loop (`useIndividualLoop` checks `!input.impersonate`); `regenGroupChatIndividual` now does too, so a regenerated impersonation takes the same merged path as a fresh one.
+- **Why forked:** Hit on the device after adding a narrator character to a one-on-one roleplay, which made it a group chat in individual mode.
+- **Upstream status:** Not submitted. Upstream staging (041e242df, 2026-10-12) still has the unguarded condition. Worth offering.
+- **Validation:** `pnpm check`.
+- **Touches:** `packages/server/src/routes/generate.routes.ts`.
+
 ## Retired patches
 
 ### `patch/store-hash-join` — retired on the 2026-09-23 sync
