@@ -7302,7 +7302,8 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
         const usesIndividualGroupGeneration = groupChatMode === "individual";
         const useIndividualLoop =
           isGroupChat && usesIndividualGroupGeneration && !input.regenerateMessageId && !input.impersonate;
-        const regenGroupChatIndividual = isGroupChat && usesIndividualGroupGeneration && input.regenerateMessageId;
+        const regenGroupChatIndividual =
+          isGroupChat && usesIndividualGroupGeneration && input.regenerateMessageId && !input.impersonate;
         const explicitlyMentionedConversationCharacterIds =
           chatMode === "conversation" && isGroupChat && !input.impersonate ? getExplicitlyMentionedCharacterIds() : [];
         const mentionedConversationCharacters = charInfo.filter((character) =>
