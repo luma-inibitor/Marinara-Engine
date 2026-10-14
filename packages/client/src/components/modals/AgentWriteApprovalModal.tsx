@@ -14,6 +14,8 @@ import { lorebookKeys } from "../../hooks/use-lorebooks";
 import { useGenerate } from "../../hooks/use-generate";
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { characterDataSchema } from "@marinara-engine/shared";
+import { showConfirmDialog } from "../../lib/app-dialogs";
+import { LorebookApprovalReview } from "./LorebookApprovalReview";
 
 interface Props {
   open: boolean;
@@ -33,12 +35,14 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
+  const [reviewDirty, setReviewDirty] = useState(false);
   const reviewFocusRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setDraft(entry?.text ?? "");
     setError(null);
     setBusyAction(null);
+    setReviewDirty(false);
     // A queued proposal also needs safe focus after Accept or Discard advances it.
     reviewFocusRef.current?.focus({ preventScroll: true });
   }, [entry?.id, entry?.text]);
@@ -83,8 +87,26 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
     }
   };
 
-  const handleAccept = async () => {
-    const text = draft.trim();
+  const confirmDropEdits = async (message: string, confirmLabel: string) =>
+    !reviewDirty ||
+    (await showConfirmDialog({
+      message,
+      confirmLabel,
+      tone: "destructive",
+    }));
+
+  const requestDiscard = async () => {
+    if (
+      await confirmDropEdits(
+        localizeUi("ui.agents.agenteditor.youHaveUnsavedChanges"),
+        localizeUi("ui.noodle.noodlerhome.discardChanges"),
+      )
+    )
+      closeAndAdvance();
+  };
+
+  const handleAccept = async (reviewedText?: string) => {
+    const text = (reviewedText ?? draft).trim();
     if (!text) return;
     setBusyAction("accept");
     setError(null);
@@ -127,6 +149,13 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
   };
 
   const handleRegenerate = async () => {
+    if (
+      !(await confirmDropEdits(
+        localizeUi("ui.agents.agenteditor.youHaveUnsavedChanges"),
+        localizeUi("ui.agents.secretplotpanel.regenerate"),
+      ))
+    )
+      return;
     if (!entry.agentType) {
       toast.warning(
         localizeUi("ui.modals.agentwriteapprovalmodal.thisProposalCannotBeRegeneratedAutomatically_1793348"),
@@ -148,6 +177,40 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
       setBusyAction(null);
     }
   };
+
+  if (entry.kind === "lorebook_update") {
+    return (
+      <Modal
+        open={open}
+        initialFocusRef={reviewFocusRef}
+        onClose={() => void requestDiscard()}
+        title={localizeUi("ui.modals.agentwriteapprovalmodal.reviewValue1Update", { value1: kindLabel })}
+        width="max-w-3xl"
+        mobileFullscreen
+      >
+        <div className="flex flex-col gap-3">
+          <p ref={reviewFocusRef} tabIndex={-1} className="text-xs text-[var(--muted-foreground)] outline-none">
+            {localizeUi("ui.modals.agentwriteapprovalmodal.agentWantsToCommitUpdate", {
+              agentName: entry.agentName,
+              kind: kindLabel.toLowerCase(),
+            })}
+            {queueNote}.
+          </p>
+          <LorebookApprovalReview
+            key={entry.id}
+            proposal={entry}
+            busyAction={busyAction}
+            error={error}
+            canRegenerate={canRegenerate}
+            onAccept={(text) => void handleAccept(text)}
+            onDiscard={() => void requestDiscard()}
+            onRegenerate={() => void handleRegenerate()}
+            onDirtyChange={setReviewDirty}
+          />
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal
@@ -199,14 +262,6 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
           />
         </label>
 
-        {entry.kind === "lorebook_update" && (
-          <p className="rounded-lg bg-[var(--background)]/70 px-3 py-2 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-            {localizeUi("ui.modals.agentwriteapprovalmodal.keepEachLorebookEntryUnderA")}{" "}
-            <span className="font-mono">###</span>{" "}
-            {localizeUi("ui.modals.agentwriteapprovalmodal.headingYouCanEditNamesKeysTagsAndContent")}
-          </p>
-        )}
-
         {error && (
           <div className="rounded-lg bg-[var(--destructive)]/10 px-3 py-2 text-xs text-[var(--destructive)]">
             {error}
@@ -243,7 +298,7 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
           </button>
           <button
             type="button"
-            onClick={handleAccept}
+            onClick={() => void handleAccept()}
             disabled={busyAction !== null || !draft.trim()}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-all hover:opacity-90 disabled:opacity-50"
           >
