@@ -14,6 +14,7 @@ patch/game-weather-during-generation
 patch/rp-weather-while-typing
 patch/openrouter-session-id
 patch/request-telemetry
+patch/openrouter-gemini-cache-breakpoint
 patch/impersonate-regen-group
 # After patch/ambient-sky: same files. Applies cleanly; kept last so a hunk
 # that stops carrying forward is a loud conflict, not a silent regression.
