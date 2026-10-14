@@ -102,6 +102,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Validation:** `pnpm check`.
 - **Touches:** `packages/server/src/routes/generate.routes.ts`.
 
+### `patch/openrouter-gemini-cache-breakpoint`
+
+- **What:** With prompt caching on, an OpenRouter request for a Gemini model carries a `cache_control` breakpoint on the text of the message at the connection's caching depth (`cachingAtDepth`, default 5; tool messages and tool-call turns are skipped), instead of the top-level `cache_control` other models get.
+- **Why forked:** OpenRouter ignores the top-level marker for Gemini; explicit Gemini caching needs a breakpoint inside message content. Measured against OpenRouter with a 9.8k-token prompt on Gemini 3.8 Flash (Vertex): the top-level marker gave no cache write and 4,080 implicit cached tokens on repeats; a message breakpoint wrote 9,783 tokens on the first request and read all 9,783 on each repeat, at about a fifth of the cost. On the live instance every Gemini request after the caching switch was turned on reported zero cache writes.
+- **Upstream status:** Not yet submitted (candidate). Self-contained, gated on OpenRouter, Gemini and the caching switch.
+- **Validation:** `pnpm check`; `provider-caching` regression (new case: breakpoint position by depth on both request paths, no top-level marker for Gemini, other models unchanged); a live run of `OpenAIProvider.chatComplete` against OpenRouter (write 9,763 then 9,763 cached twice).
+- **Touches:** `packages/server/src/services/llm/providers/openai.provider.ts`, `scripts/regressions/provider-caching.regression.ts`.
+
 ## Retired patches
 
 ### `patch/store-hash-join` — retired on the 2026-09-23 sync
