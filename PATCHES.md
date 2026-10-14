@@ -110,6 +110,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Validation:** `pnpm check`; `provider-caching` regression (new case: breakpoint position by depth on both request paths, no top-level marker for Gemini, other models unchanged); a live run of `OpenAIProvider.chatComplete` against OpenRouter (write 9,763 then 9,763 cached twice).
 - **Touches:** `packages/server/src/services/llm/providers/openai.provider.ts`, `scripts/regressions/provider-caching.regression.ts`.
 
+### `patch/keeper-review-ui`
+
+- **What:** Replaces the single markdown textarea in the Lorebook Keeper write-approval dialog with a per-entry review. The client loads the current entries of the target lorebook and compares each proposed entry against them: no entry with that name is **new**, current text followed by added text is **appended**, anything else is **replaced**. A count strip totals entries by kind plus locked entries. Replaced entries get a line diff (reworded lines are paired and word-diffed with `diffWords`, unchanged runs fold, removed lines are counted on the collapsed card); appended entries show the end of the current text and the added lines; new entries render as plain text. Each entry has an include checkbox, inline editing (renaming only for new entries), and removable keys for keys the proposal adds. Locked entries are shown but cannot be selected. Closing, Escape, the backdrop, Discard and Regenerate ask before dropping edits. Accept re-serializes the reviewed entries into the existing approval text format, so the commit endpoint and server are unchanged. Summary and character card proposals keep the textarea. UI copy reuses existing upstream strings where one exists.
+- **Why forked:** With approval required, the old dialog made it hard to see how many entries changed, whether each was created, replaced or appended, and what the edits were; multiple entries shared one textarea.
+- **Upstream status:** Not submitted. Client-only and self-contained, so it is upstream-offerable.
+- **Validation:** `pnpm check`; `node ./scripts/run-regressions.mjs --filter scripts/regressions/lorebook-approval-review.regression.ts` (new lane: the client parser and formatter round-trip against the server's `buildLorebookWriteApprovalProposal` and `parseLorebookWriteApprovalText`, classification, locked detection, line diff and folding, target routing); end-to-end in the UI harness on desktop and phone, answering one generation with a server-built proposal and checking the committed lorebook through the API.
+- **Touches:** `packages/client/src/components/modals/AgentWriteApprovalModal.tsx`, `packages/client/src/components/modals/LorebookApprovalReview.tsx`, `packages/client/src/lib/lorebook-approval-review.ts`, `packages/client/src/localization/locales/en.json`, `scripts/regressions/lorebook-approval-review.regression.ts`.
+
 ## Retired patches
 
 ### `patch/store-hash-join` — retired on the 2026-09-23 sync
