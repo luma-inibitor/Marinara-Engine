@@ -1,0 +1,20 @@
+{
+  "baseRef": "origin/staging",
+  "baseCommit": "05843b89bb6e311d8bcbdfd3ad9297e21616fa90",
+  "baseBranch": "staging",
+  "patches": {
+    "patch/mari-unsandboxed-shell": "41b61143b5294ee9cdfdf51c2b41f119a7b14a80",
+    "patch/capability-relink-node-modules": "c19db01bc206d4fca145695df99c0de3371e966f",
+    "patch/fork-upstream-diagnostics": "60f445e42ec646d5738da9fdfc4be27da987bfcc",
+    "patch/ambient-sky": "228d380be5c0be246d4cba42d81018448cae89f9",
+    "patch/game-widget-tags-persist": "130bbf05d2effa4a01d658237443b54711713769",
+    "patch/game-weather-during-generation": "0c063750093be6f63825f56d4e09814376eeb21d",
+    "patch/rp-weather-while-typing": "abe961944069ce0879d4dd2511ea7ab033d6d7e3",
+    "patch/openrouter-session-id": "d723baa303716f3343c2783483be921a87531d24",
+    "patch/request-telemetry": "3e4380ff4c4e8c92f8fc62178bd528376a73bec5",
+    "patch/openrouter-gemini-cache-breakpoint": "3551747d3a014ba89649529626868080aee0596c",
+    "patch/impersonate-regen-group": "9d1e1d3dcec2dfd069526c89a19bfec9111afd58",
+    "patch/keeper-review-ui": "c6dc24eb867692a783a64961aa588f9a955b3292",
+    "patch/fork-tooling": "4c904d08cf01bd13f2bee738175dc8c3d800ff6c"
+  }
+}
