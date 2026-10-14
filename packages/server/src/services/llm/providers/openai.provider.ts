@@ -1170,11 +1170,43 @@ export class OpenAIProvider extends BaseLLMProvider {
     );
   }
 
+  private isOpenRouterGeminiCaching(options: ChatOptions): boolean {
+    return (
+      this.isOpenRouterEndpoint() && !!options.enableCaching && /(^|\/)gemini/i.test(options.model.replace(/^~/, ""))
+    );
+  }
+
+  /** OpenRouter ignores a top-level cache_control for Gemini; explicit caching needs a breakpoint in message content. */
+  private applyOpenRouterGeminiBreakpoint(body: Record<string, unknown>, options: ChatOptions): void {
+    if (!this.isOpenRouterGeminiCaching(options) || !Array.isArray(body.messages)) return;
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const depth =
+      typeof options.cachingAtDepth === "number" && options.cachingAtDepth >= 0
+        ? Math.floor(options.cachingAtDepth)
+        : 5;
+    for (let index = Math.max(0, messages.length - 1 - depth); index >= 0; index--) {
+      const message = messages[index]!;
+      if (message.role === "tool" || (Array.isArray(message.tool_calls) && message.tool_calls.length)) continue;
+      if (typeof message.content === "string" && message.content) {
+        message.content = [{ type: "text", text: message.content, cache_control: { type: "ephemeral" } }];
+      } else if (Array.isArray(message.content)) {
+        const text = [...message.content].reverse().find((part: Record<string, unknown>) => part?.type === "text");
+        if (!text) continue;
+        text.cache_control = { type: "ephemeral" };
+      } else {
+        continue;
+      }
+      logger.debug("[OpenAI] OpenRouter Gemini cache breakpoint on message %d of %d", index, messages.length);
+      return;
+    }
+  }
+
   private shouldUseOpenRouterPromptCaching(options: ChatOptions): boolean {
     return (
       (this.providerKind === "openrouter" ||
         (!this.isGenericCustomProvider() && this.baseUrl.includes("openrouter.ai"))) &&
-      !!options.enableCaching
+      !!options.enableCaching &&
+      !this.isOpenRouterGeminiCaching(options)
     );
   }
 
@@ -1440,6 +1472,7 @@ export class OpenAIProvider extends BaseLLMProvider {
       this.applyChatCompletionsReasoning(body, options);
     }
 
+    this.applyOpenRouterGeminiBreakpoint(body, options);
     this.applyOpenRouterPromptCaching(body, options);
     this.applyServiceTier(body, options);
     this.applyCustomParameters(body, options);
@@ -1734,6 +1767,7 @@ export class OpenAIProvider extends BaseLLMProvider {
       this.applyChatCompletionsReasoning(body, options);
     }
 
+    this.applyOpenRouterGeminiBreakpoint(body, options);
     this.applyOpenRouterPromptCaching(body, options);
     this.applyServiceTier(body, options);
     this.applyCustomParameters(body, options);

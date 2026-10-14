@@ -112,6 +112,50 @@ try {
     }
   });
 
+  await test("OpenRouter Gemini caching puts a breakpoint in message content at the caching depth", async () => {
+    const provider = new OpenAIProvider(`${baseUrl}/proxy/v1`, "test", undefined, undefined, undefined, "openrouter");
+    const messages: ChatMessage[] = [
+      { role: "system", content: "System" },
+      { role: "user", content: "One" },
+      { role: "assistant", content: "Two" },
+      { role: "user", content: "Three" },
+    ];
+    const marked = (body: Record<string, any>) =>
+      body.messages.flatMap((m: any, i: number) =>
+        Array.isArray(m.content) && m.content.some((p: any) => p.cache_control) ? [i] : [],
+      );
+    for (const [cachingAtDepth, index] of [
+      [0, 3],
+      [2, 1],
+      [9, 0],
+    ] as const) {
+      await provider.chatComplete(messages, {
+        model: "~google/gemini-flash-latest",
+        stream: false,
+        enableCaching: true,
+        cachingAtDepth,
+      });
+      const body = requests.at(-1)!;
+      assert.equal(body.cache_control, undefined, "Gemini gets no top-level cache_control");
+      assert.deepEqual(marked(body), [index]);
+      assert.deepEqual(body.messages[index].content, [
+        { type: "text", text: messages[index]!.content, cache_control: { type: "ephemeral" } },
+      ]);
+    }
+    await chatUsage(provider, messages, {
+      model: "google/gemini-3.8-flash",
+      stream: false,
+      enableCaching: true,
+      cachingAtDepth: 1,
+    });
+    assert.deepEqual(marked(requests.at(-1)!), [2], "streaming path marks the same message");
+    await provider.chatComplete(messages, { model: "google/gemini-3.8-flash", stream: false, enableCaching: false });
+    assert.deepEqual(marked(requests.at(-1)!), [], "no breakpoint without caching");
+    await provider.chatComplete(messages, { model: "anthropic/claude-opus-5", stream: false, enableCaching: true });
+    assert.deepEqual(requests.at(-1)?.cache_control, { type: "ephemeral" }, "other models keep the top-level marker");
+    assert.deepEqual(marked(requests.at(-1)!), []);
+  });
+
   await test("Anthropic keeps depth instructions at their history position on both request paths", async () => {
     const provider = new AnthropicProvider(`${baseUrl}/anthropic`, "test");
     for (const model of ["claude-opus-5", "claude-sonnet-4-20250514"]) {
