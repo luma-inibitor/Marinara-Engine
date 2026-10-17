@@ -15,11 +15,13 @@ import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageInfo;
 import android.content.pm.Signature;
 import android.net.Uri;
+import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -27,6 +29,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.Settings;
+import android.text.InputType;
 import android.util.Base64;
 import android.view.View;
 import android.view.Window;
@@ -34,6 +37,7 @@ import android.view.WindowManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.JavascriptInterface;
+import android.webkit.SslErrorHandler;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -42,6 +46,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -55,11 +60,13 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.util.Locale;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -79,6 +86,10 @@ public class MainActivity extends Activity {
     private static final String DISPLAY_PREFS = "marinara_display";
     private static final String OPEN_IN_BROWSER = "open_in_browser";
     private static final String STATUS_BAR_VISIBLE = "status_bar_visible";
+    private static final String CONNECTION_PREFS = "marinara_connection";
+    private static final String REMOTE_SERVER_URL_PREF = "remote_server_url";
+    private static final String REMOTE_HOST_PATTERN =
+            "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$";
     private static final String NOTIFICATION_PERMISSION_PREFS = "marinara_notification_permission";
     private static final String NOTIFICATION_PERMISSION_REQUESTED = "requested";
     private static final String MESSAGE_NOTIFICATION_CHANNEL_ID = "marinara_messages";
@@ -117,6 +128,9 @@ public class MainActivity extends Activity {
     private ProgressBar spinner;
     private TextView statusText;
     private Button manualServerButton;
+    private Button setupButton;
+    private Button termuxButton;
+    private Button remoteServerButton;
     private ValueCallback<Uri[]> fileUploadCallback;
     /** The empty photo the camera choice of the current file chooser writes into, if it offered one. */
     private Uri pendingCameraPhoto;
@@ -212,11 +226,11 @@ public class MainActivity extends Activity {
                         .putBoolean(OPEN_IN_BROWSER, checked).apply());
         actions.addView(browserChoice, buildActionButtonLayoutParams());
 
-        Button setupButton = buildActionButton("Install / Start Marinara");
+        setupButton = buildActionButton("Install / Start Marinara");
         setupButton.setOnClickListener(v -> startTermuxSetup());
         actions.addView(setupButton, buildActionButtonLayoutParams());
 
-        Button termuxButton = buildActionButton("Get Termux manually");
+        termuxButton = buildActionButton("Get Termux manually");
         termuxButton.setOnClickListener(v -> openTermuxDownload());
         actions.addView(termuxButton, buildActionButtonLayoutParams());
 
@@ -231,6 +245,11 @@ public class MainActivity extends Activity {
         manualServerButton.setVisibility(View.GONE);
         manualServerButton.setOnClickListener(v -> confirmManualServerAccess());
         actions.addView(manualServerButton, buildActionButtonLayoutParams());
+
+        remoteServerButton = buildActionButton("Connect to a remote server");
+        remoteServerButton.setOnClickListener(v -> showRemoteServerDialog());
+        actions.addView(remoteServerButton, buildActionButtonLayoutParams());
+        updateConnectionModeViews();
 
         container.addView(actions);
 
@@ -340,6 +359,15 @@ public class MainActivity extends Activity {
                     handleServerLoadFailure();
                 }
             }
+
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler sslHandler, SslError error) {
+                // Never proceed past a certificate error; retry like any other unreachable server.
+                sslHandler.cancel();
+                if (error != null && isActiveServerMainFrame(error.getUrl())) {
+                    handleServerLoadFailure();
+                }
+            }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
@@ -365,6 +393,11 @@ public class MainActivity extends Activity {
     private void tryConnect() {
         if (isCheckingServer) return;
         cancelPendingConnectionRetry();
+        String remoteServer = remoteServerUrl();
+        if (remoteServer != null) {
+            connectRemoteServer(remoteServer);
+            return;
+        }
         showBootstrap("Connecting to Marinara Engine…\nIf this is your first launch, tap Install / Start Marinara.", true);
 
         isCheckingServer = true;
@@ -376,7 +409,7 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 isCheckingServer = false;
                 if (isDestroyed() || connectionRetryPaused) return;
-                if (openInBrowser != shouldOpenInBrowser()) {
+                if (openInBrowser != shouldOpenInBrowser() || remoteServerUrl() != null) {
                     tryConnect();
                     return;
                 }
@@ -411,7 +444,130 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** Remote mode skips Termux and the local-secret handshake and loads the configured HTTPS origin. */
+    private void connectRemoteServer(String origin) {
+        showBootstrap("Connecting to " + origin + "…", true);
+        if (connectionRetryPaused) return;
+        setStartRequested(false);
+        if (shouldOpenInBrowser()) {
+            pauseConnectionRetryLoop();
+            openBrowser(origin);
+            return;
+        }
+        mainFrameLoadFailed = false;
+        statusText.setText("Opening " + origin + "…");
+        webView.loadUrl(origin + "/");
+    }
+
+    /** The configured remote server origin, or null when the app uses the local Termux server. */
+    private String remoteServerUrl() {
+        return normalizeRemoteServerUrl(
+                getSharedPreferences(CONNECTION_PREFS, MODE_PRIVATE).getString(REMOTE_SERVER_URL_PREF, null));
+    }
+
+    /** The origin the WebView and native bridge trust: the remote server when set, otherwise the local one. */
+    private String serverUrl() {
+        String remoteServer = remoteServerUrl();
+        return remoteServer != null ? remoteServer : SERVER_URL;
+    }
+
+    /**
+     * Reduces user input to a bare https origin ("https://host" or "https://host:port").
+     * Returns null for anything else, including http URLs, credentials, paths, queries and fragments.
+     */
+    static String normalizeRemoteServerUrl(String input) {
+        if (input == null) return null;
+        String value = input.trim();
+        if (value.isEmpty()) return null;
+        if (!value.contains("://")) value = "https://" + value;
+        try {
+            URI uri = new URI(value);
+            if (!"https".equalsIgnoreCase(uri.getScheme())) return null;
+            if (uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null) return null;
+            String path = uri.getRawPath();
+            if (path != null && !path.isEmpty() && !"/".equals(path)) return null;
+            String host = uri.getHost();
+            if (host == null) return null;
+            host = host.toLowerCase(Locale.ROOT);
+            if (!host.matches(REMOTE_HOST_PATTERN)) return null;
+            int port = uri.getPort();
+            if (port == 443) port = -1;
+            if (port != -1 && (port < 1 || port > 65_535)) return null;
+            return "https://" + host + (port == -1 ? "" : ":" + port);
+        } catch (Exception error) {
+            return null;
+        }
+    }
+
+    private void showRemoteServerDialog() {
+        String current = remoteServerUrl();
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setHint("https://my-server.example.com");
+        if (current != null) input.setText(current);
+        FrameLayout inputContainer = new FrameLayout(this);
+        inputContainer.setPadding(48, 8, 48, 0);
+        inputContainer.addView(input);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle("Connect to a remote server")
+                .setMessage("Enter the HTTPS address of a Marinara server running on another machine. "
+                        + "The app then opens that server instead of starting Marinara in Termux.")
+                .setView(inputContainer)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Connect", null);
+        if (current != null) {
+            builder.setNeutralButton("Use local server", (dialog, which) -> setRemoteServerUrl(null));
+        }
+        AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(shown -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String entered = input.getText().toString().trim();
+            String normalized = normalizeRemoteServerUrl(entered);
+            if (normalized == null) {
+                input.setError(entered.toLowerCase(Locale.ROOT).startsWith("http://")
+                        ? "Only https:// addresses are supported."
+                        : "Enter an address like https://my-server.example.com");
+                return;
+            }
+            dialog.dismiss();
+            setRemoteServerUrl(normalized);
+        }));
+        dialog.show();
+    }
+
+    private void setRemoteServerUrl(String origin) {
+        SharedPreferences.Editor editor = getSharedPreferences(CONNECTION_PREFS, MODE_PRIVATE).edit();
+        if (origin == null) {
+            editor.remove(REMOTE_SERVER_URL_PREF);
+        } else {
+            editor.putString(REMOTE_SERVER_URL_PREF, origin);
+        }
+        editor.apply();
+        setStartRequested(false);
+        // Drop the previous server's page so it stops running behind the launcher.
+        webView.stopLoading();
+        webView.loadUrl("about:blank");
+        updateConnectionModeViews();
+        resumeConnectionRetryLoop();
+        tryConnect();
+    }
+
+    private void updateConnectionModeViews() {
+        String remoteServer = remoteServerUrl();
+        boolean remote = remoteServer != null;
+        setupButton.setVisibility(remote ? View.GONE : View.VISIBLE);
+        termuxButton.setVisibility(remote ? View.GONE : View.VISIBLE);
+        remoteServerButton.setText(remote ? "Remote server: " + remoteServer : "Connect to a remote server");
+    }
+
     private void retryConnection() {
+        String remoteServer = remoteServerUrl();
+        if (remoteServer != null) {
+            showBootstrap("Waiting for " + remoteServer + "…\nCheck that the server is running and reachable from this device.", true);
+            scheduleConnectionRetry();
+            return;
+        }
         showBootstrap("Waiting for Marinara Engine…\nTap Install / Start Marinara if the local server is not running yet.", true);
         scheduleConnectionRetry();
     }
@@ -577,7 +733,7 @@ public class MainActivity extends Activity {
     private boolean isServerUrl(String url) {
         if (url == null) return false;
         try {
-            Uri serverUri = Uri.parse(SERVER_URL);
+            Uri serverUri = Uri.parse(serverUrl());
             Uri candidateUri = Uri.parse(url);
             return textEquals(serverUri.getScheme(), candidateUri.getScheme())
                     && textEquals(serverUri.getHost(), candidateUri.getHost())
