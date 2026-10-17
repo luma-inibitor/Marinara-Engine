@@ -7,6 +7,7 @@ The Android app is a Termux bootstrap + WebView shell for Marinara Engine. It is
 ## How It Works
 
 - If Marinara Engine is already running in Termux, the APK opens `http://127.0.0.1:<PORT>` in the app or your browser, following the saved **Open in browser** choice. The default build-time port is `7860`.
+- **Connect to a remote server** on the bootstrap screen points the app at a Marinara server on another machine instead. It accepts `https://` addresses only, skips Termux and the local-secret handshake, and keeps retrying while that server is unreachable. See [Remote Server](#remote-server).
 - If the server is not running, the APK shows bootstrap actions: **Install / Start Marinara**, **Get Termux manually**, and **Retry connection**. A legacy manual server can be opened only after the APK detects the missing authentication route and you confirm that you started it.
 - **Install / Start Marinara** first checks for an authenticated running server and reuses it. Repeated taps during setup offer a retry only after a warning. It downloads the pinned Termux APK from F-Droid when Termux is missing, verifies its exact size, SHA-256, package identity, version, and F-Droid signer, then hands it to Android's package installer.
 - After Termux is installed, **Install / Start Marinara** uses Termux's `RUN_COMMAND` integration to run the Marinara Termux installer command. This requires the Android **Run commands in Termux environment** permission to be granted to Marinara Engine, and `allow-external-apps=true` to be enabled in Termux.
@@ -138,11 +139,25 @@ To skip automatic Engine updates on every launch, add `AUTO_UPDATE_ENABLED=false
 
 Then open the **Marinara Engine** app from your home screen. The app shows "Connecting..." until the local server is ready, then loads automatically.
 
-Because the APK points at `http://127.0.0.1:<PORT>`, it only works while the Marinara Engine server is running on the same Android device and using the same port value.
+In local mode the APK points at `http://127.0.0.1:<PORT>`, so it only works while the Marinara Engine server is running on the same Android device and using the same port value. To use a server on another machine, see [Remote Server](#remote-server).
 
 Marinara hides the Android status bar by default for a distraction-free view. Enable **Show Android status bar** under **Settings > General > App Behavior** to keep the time, battery level, and notification icons visible. The Android app remembers this choice across restarts.
 
 On Android 13 and newer, enabling **Mobile app** under **Background Notifications** opens Android's notification permission prompt. Browser notifications remain a separate setting. Notifications conceal reply content and ask the user to open Marinara to read the message.
+
+### Remote Server
+
+The app can open a Marinara server that runs on another machine, for example a desktop reached through Tailscale or a reverse proxy.
+
+1. Open the bootstrap screen. On first launch it shows while the app looks for a local server. From inside Marinara, use **Settings > General > App Behavior > Open Android launcher (app or browser)**.
+2. Tap **Connect to a remote server**.
+3. Enter the server's HTTPS address, for example `https://marinara.example.ts.net` or `https://my-server.example.com`, and tap **Connect**. A bare host name gets `https://` added. Paths, query strings, and credentials are rejected.
+
+The app remembers the address. While it is set, the Termux buttons are hidden, and the button reads **Remote server: \<address\>**. Tap it to change the address, or tap **Use local server** to return to the local Termux flow.
+
+Only `https://` is accepted. The app never allows cleartext traffic to anything except the local server, and it does not proceed past certificate errors. The Android bridge (status bar, notifications, file saving, launcher) is only enabled for the configured server's origin. Links to other origins open in your browser.
+
+The remote server must already allow the connection. Remote mode does not use the per-install local secret. Configure the server for remote access as described in [the Remote Access guide](../docs/REMOTE_ACCESS.md); if the address is a DNS name, add its origin to `CSRF_TRUSTED_ORIGINS` (which also trusts the host name).
 
 ## Pre-built APKs
 
