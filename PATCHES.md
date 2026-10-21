@@ -32,14 +32,6 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Upstream status:** N/A — fork-only.
 - **Touches:** `FORK.md`, `PATCHES.md`, `tools/`, and `fork-base.json` (written onto the integration branch, never onto a patch branch).
 
-### `patch/capability-relink-node-modules`
-
-- **What:** Makes `CapabilityModuleRuntime.ensureModuleResolution()` remove a stale `capability-packages/node_modules` symlink before recreating it. Its `existsSync(link)` guard follows symlinks, so a _dangling_ link reads as absent, then `symlink()` throws `EEXIST` and host dependency resolution stays broken — packages whose server entrypoint imports a host dep (`pino`, `zod`) fail to activate and roll back on every restart, producing an endless "update agents" loop.
-- **Why forked:** Surfaced by our two-clone setup: `capability-packages/` lives under the shared `DATA_DIR`, and migrating the data + renaming the old clone left the link pointing at a path that no longer exists. This is a genuine upstream bug (any moved/removed checkout triggers it), so it is a candidate to submit upstream.
-- **Upstream status:** Not yet submitted (candidate). Still unfixed on staging as of 2.4.2, and it rebases cleanly.
-- **Touches:** `packages/server/src/services/capability-packages/capability-module-runtime.service.ts`.
-- **Operational note:** Existing installs with an already-dangling link self-heal on the next boot once this patch is deployed. To fix immediately without redeploying, delete the link and relaunch: `rm -f "$DATA_DIR/capability-packages/node_modules"`.
-
 ### `patch/ambient-sky`
 
 - **What:** Rebuilds the roleplay weather overlay's visuals (`WeatherEffects` canvas) while keeping its contract — a transparent, alpha-capped layer above the user's chat background — and its free-text parsing pipeline intact. Adds a keyframed sky wash interpolated across the hour, a seeded star field with twinklers/meteors/galactic band, per-weather-family moods (three-layer parallax cloud deck, translucent veil, fog banks, shared wind field, `bodyDim` so storms dim the moon instead of deleting it), aurora curtain rendering, and "luminous" celestial bodies: an opaque sun disc with elevation-driven reddening and horizon-only refraction flattening, and a moon with a true lunar phase (elliptical terminator, earthshine, maria) derived from the tracker's free-text `date` via `deriveMoonPhase()`. All glow is alpha-composited (never additive) so the layer survives light chat backgrounds. Lightning keeps its epilepsy-safe alpha ceiling, decay, and cadence but strikes from a sky point with a brief bolt. Both render paths (OffscreenCanvas worker and main-thread fallback) share the new `AmbientScene`; DPR/pixel caps, pause states, `weatherEffects` toggle, and reduced-motion behavior are unchanged.
@@ -135,6 +127,10 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Touches:** `android/app/src/main/java/com/marinara/engine/MainActivity.java`, `android/README.md`, `scripts/regressions/android-remote-server.regression.ts`.
 
 ## Retired patches
+
+### `patch/capability-relink-node-modules` — retired on the 2026-10-21 sync
+
+Upstream fixed the same bug its own way. `abcaf758f feat(packages): agent package servers use the Engine's runtime services` (2026-10-20, part of upstream #7858) moved the link into `linkCapabilityPackageDependencies()` in `capability-native-dependencies.service.ts`, which `lstat`s the link instead of trusting `existsSync()`, unlinks a dangling link or one that points at another install, and relinks it. A path that is not a link is left alone. Our `rm`-then-`symlink` hunk conflicted with the rewrite of `ensureModuleResolution()` and was dropped, so the branch rebased to empty. The operational note still holds: an already-dangling link heals on the next boot.
 
 ### `patch/store-hash-join` — retired on the 2026-09-23 sync
 
