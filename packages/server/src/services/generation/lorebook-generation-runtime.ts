@@ -12,6 +12,8 @@ export function resolveLorebookGenerationTriggers(
   input: {
     impersonate?: boolean;
     regenerateMessageId?: string | null;
+    /** Role of the message being regenerated; a user-role reroll writes as the persona. */
+    regenerateMessageRole?: string | null;
     userMessage?: string | null;
     generationGuide?: string | null;
     generationGuideSource?: "narrator" | "guide" | "game_start" | null;
@@ -21,11 +23,14 @@ export function resolveLorebookGenerationTriggers(
   const triggers = new Set<string>();
   triggers.add(chatMode === "game" ? "game" : chatMode);
 
-  if (input.impersonate) {
-    triggers.add("impersonate");
-  } else if (input.regenerateMessageId) {
+  if (input.regenerateMessageId) {
+    // Rerolling the persona's own turn is an impersonation too, so entries that
+    // exclude "impersonate" stay out of it.
+    if (input.impersonate || input.regenerateMessageRole === "user") triggers.add("impersonate");
     triggers.add("swipe");
     triggers.add("regenerate");
+  } else if (input.impersonate) {
+    triggers.add("impersonate");
   } else if (
     input.generationGuide?.trim() &&
     (input.generationGuideSource === "narrator" || input.generationGuideSource === "guide")
