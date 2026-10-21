@@ -795,9 +795,11 @@ export class WorkspaceCommands {
     const output = compactOutput(
       [
         `Command: ${engineLineText(command)}`,
-        sandboxed.backend === "unsandboxed"
-          ? `Sandbox: ${sandboxed.backend} (no OS sandbox: network and workspace writes are NOT confined; env secrets stripped)`
-          : `Sandbox: ${sandboxed.backend} (network denied; writes confined to workspace)`,
+        `Sandbox: ${sandboxed.backend} (${
+          sandboxed.backend === "unsandboxed"
+            ? "no OS sandbox: network and workspace writes are NOT confined; env secrets stripped"
+            : "network denied; writes confined to workspace"
+        })`,
         // Engine region: staged lines sit BEFORE the stdout/stderr markers,
         // where script text cannot reach - isStagedSensitiveMutation keys on
         // exactly this placement.

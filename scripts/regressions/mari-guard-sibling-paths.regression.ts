@@ -703,8 +703,8 @@ if (process.platform !== "win32") {
 const sandboxFlat = sandboxSource;
 assert.equal(
   (sandboxFlat.match(/detached: true/gu) ?? []).length,
-  2,
-  "both backend spawns are detached - group semantics for teardown",
+  3,
+  "all three backend spawns (Seatbelt, bubblewrap, opt-in unsandboxed) are detached - group semantics for teardown",
 );
 assert.match(sandboxFlat, /process\.kill\(-child\.pid, signal\);/u);
 
