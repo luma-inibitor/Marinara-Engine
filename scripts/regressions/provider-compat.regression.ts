@@ -418,10 +418,18 @@ try {
     enableCaching: true,
     suppressModelParameters: true,
   });
-  assert.deepEqual(openRouterCachingRequestBodies[0]?.cache_control, { type: "ephemeral" });
+  // OpenRouter ignores a top-level marker for Gemini, so caching puts the breakpoint in message content instead.
+  const geminiBreakpoint = (body: Record<string, unknown> | undefined) =>
+    (
+      (body?.messages as Array<{ content?: unknown }> | undefined)?.[0]?.content as
+        Array<{ cache_control?: unknown }> | undefined
+    )?.[0]?.cache_control;
+  for (const index of [0, 2, 3]) {
+    assert.equal("cache_control" in (openRouterCachingRequestBodies[index] ?? {}), false);
+    assert.deepEqual(geminiBreakpoint(openRouterCachingRequestBodies[index]), { type: "ephemeral" });
+  }
   assert.equal("cache_control" in (openRouterCachingRequestBodies[1] ?? {}), false);
-  assert.deepEqual(openRouterCachingRequestBodies[2]?.cache_control, { type: "ephemeral" });
-  assert.deepEqual(openRouterCachingRequestBodies[3]?.cache_control, { type: "ephemeral" });
+  assert.equal(geminiBreakpoint(openRouterCachingRequestBodies[1]), undefined);
 } finally {
   await new Promise<void>((resolve, reject) =>
     openRouterCachingServer.close((error) => (error ? reject(error) : resolve())),
@@ -4106,13 +4114,11 @@ try {
             tool_calls: identifiedResult.toolCalls,
             ...(replayMetadata ? { providerMetadata: identifiedResult.providerMetadata } : {}),
           },
-          ...identifiedResult.toolCalls.map(
-            (call, index): ChatMessage => ({
-              role: "tool",
-              tool_call_id: call.id,
-              content: JSON.stringify({ total: 17 + index }),
-            }),
-          ),
+          ...identifiedResult.toolCalls.map((call, index): ChatMessage => ({
+            role: "tool",
+            tool_call_id: call.id,
+            content: JSON.stringify({ total: 17 + index }),
+          })),
         ],
         { model: "gemini-2.0-flash", tools: [rollDiceTool], onToken: () => {} },
       );
