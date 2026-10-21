@@ -480,7 +480,7 @@ export function LorebookApprovalReview({
                   )}
                   {isEdited && (
                     <span className="shrink-0 rounded-full bg-[var(--accent)] px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--accent-foreground)]">
-                      {localizeUi("ui.chat.mariediteasyviewer.actionEdited")}
+                      {localizeUi("ui.modals.lorebookapprovalreview.actionEdited")}
                     </span>
                   )}
                   {!item.included && !locked && (
@@ -523,7 +523,7 @@ export function LorebookApprovalReview({
 
                   <div className="flex flex-wrap items-center gap-1">
                     <span className="mr-1 text-[0.625rem] font-semibold uppercase text-[var(--muted-foreground)]">
-                      {localizeUi("ui.chat.mariediteasyviewer.primaryKeys")}
+                      {localizeUi("ui.modals.lorebookapprovalreview.primaryKeys")}
                     </span>
                     {existingKeys.map((key) => (
                       <span
