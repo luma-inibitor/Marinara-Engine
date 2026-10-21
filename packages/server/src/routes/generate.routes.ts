@@ -1475,9 +1475,11 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
       throw err;
     };
 
+    let regenerateMessageRole: string | null = null;
     if (input.regenerateMessageId) {
       const regenCandidate = await chats.getMessage(input.regenerateMessageId).catch(releaseActiveGenerationAndRethrow);
       if (regenCandidate?.chatId === input.chatId) {
+        regenerateMessageRole = regenCandidate.role;
         const replay = normalizeGenerationReplay(parseExtra(regenCandidate.extra).generationReplay);
         applyGenerationReplayToRegenerateInput(input, replay);
         const regenerationCharacterIds = parseJsonField<string[]>(chat.characterIds, []);
@@ -2001,7 +2003,10 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
         !input.turnGameBots &&
         !input.userMessage?.trim() &&
         (input.attachments?.length ?? 0) === 0;
-      const lorebookGenerationTriggers = resolveLorebookGenerationTriggers(input, chatMode);
+      const lorebookGenerationTriggers = resolveLorebookGenerationTriggers(
+        { ...input, regenerateMessageRole },
+        chatMode,
+      );
       const supportsHiddenFromAI = chatMode === "conversation" || chatMode === "roleplay";
       const preferLatestVisibleGameState = shouldPreferLatestVisibleGameState(input);
 
