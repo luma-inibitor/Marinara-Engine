@@ -102,6 +102,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Validation:** `pnpm check`.
 - **Touches:** `packages/server/src/routes/generate.routes.ts`.
 
+### `patch/impersonate-lore-trigger`
+
+- **What:** A reroll (regenerate or swipe) of a user-role message now carries the `impersonate` lorebook generation trigger, alongside `swipe` and `regenerate`. `resolveLorebookGenerationTriggers` takes the role of the message being regenerated, and `generate.routes.ts` passes it from the regen target it already loads. Before, `impersonate` was added only when `input.impersonate` was set, which a reroll gets only from an impersonation's stored generation replay; rerolling a typed message, or an impersonation without a replay, wrote as the persona with only `swipe`/`regenerate`. A reroll of a stored impersonation also keeps `swipe`/`regenerate` now, where it used to carry `impersonate` alone. The prompt dry run (`dry-run-route.ts`) has its own copy of the rule and gets the same change, so the preview matches the real scan. Continue is unaffected: it accepts only assistant messages.
+- **Why forked:** A hidden GM lorebook excludes `impersonate` so the AI writing as the persona never sees the secrets. Rerolling the persona's turn leaked them into it.
+- **Upstream status:** Not submitted (candidate). Upstream bug, self-contained.
+- **Validation:** `pnpm check`; `node ./scripts/run-regressions.mjs --filter scripts/regressions/prompt.regression.ts` (new case: trigger sets for impersonate, user-role and assistant-role rerolls, and a plain turn, plus source checks that both routes pass the role).
+- **Touches:** `packages/server/src/services/generation/lorebook-generation-runtime.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/dry-run-route.ts`, `scripts/regressions/prompt.regression.ts`.
+
 ### `patch/openrouter-gemini-cache-breakpoint`
 
 - **What:** With prompt caching on, an OpenRouter request for a Gemini model carries a `cache_control` breakpoint on the text of the message at the connection's caching depth (`cachingAtDepth`, default 5; tool messages and tool-call turns are skipped), instead of the top-level `cache_control` other models get.
