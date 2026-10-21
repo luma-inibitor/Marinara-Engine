@@ -229,6 +229,7 @@ function resolveDryRunLorebookGenerationTriggers(
   input: {
     impersonate?: boolean;
     regenerateMessageId?: unknown;
+    regenerateMessageRole?: string | null;
     userMessage?: string | null;
   },
   chatMode: string,
@@ -236,11 +237,13 @@ function resolveDryRunLorebookGenerationTriggers(
   const triggers = new Set<string>(["prompt_preview"]);
   triggers.add(chatMode === "game" ? "game" : chatMode);
 
-  if (input.impersonate) {
-    triggers.add("impersonate");
-  } else if (typeof input.regenerateMessageId === "string" && input.regenerateMessageId.trim()) {
+  if (typeof input.regenerateMessageId === "string" && input.regenerateMessageId.trim()) {
+    // Same as resolveLorebookGenerationTriggers: a user-role reroll is an impersonation.
+    if (input.impersonate || input.regenerateMessageRole === "user") triggers.add("impersonate");
     triggers.add("swipe");
     triggers.add("regenerate");
+  } else if (input.impersonate) {
+    triggers.add("impersonate");
   } else if (!input.userMessage?.trim()) {
     triggers.add("continue");
     triggers.add("autonomous");
@@ -789,6 +792,9 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       {
         impersonate,
         regenerateMessageId: body.regenerateMessageId,
+        regenerateMessageRole: regenerateMessageId
+          ? allChatMessages.find((message) => message.id === regenerateMessageId)?.role
+          : null,
         userMessage,
       },
       chatMode,
