@@ -740,6 +740,7 @@ import {
 } from "../../packages/server/src/services/generation/illustrator-manual-prompt-generation.js";
 import {
   buildLorebookScanMessagesWithGenerationGuide,
+  resolveLorebookGenerationTriggers,
   resolveLorebookTokenBudget,
 } from "../../packages/server/src/services/generation/lorebook-generation-runtime.js";
 import { createAgentLorebookTriggerResolver } from "../../packages/server/src/services/generation/agent-lorebook-triggers.js";
@@ -1688,6 +1689,58 @@ const cases: RegressionCase[] = [
       assert.equal(
         resolveLorebookTokenBudget({ generationLorebookTokenBudget: -1 }),
         LIMITS.DEFAULT_LOREBOOK_TOKEN_BUDGET,
+      );
+    },
+  },
+  {
+    name: "lorebook generation triggers treat persona-turn rerolls as impersonation",
+    run() {
+      const sorted = (values: string[]) => [...values].sort();
+      assert.deepEqual(sorted(resolveLorebookGenerationTriggers({ impersonate: true }, "roleplay")), [
+        "impersonate",
+        "roleplay",
+      ]);
+      // Rerolling a user-role message writes as the persona, with or without a stored impersonation replay.
+      assert.deepEqual(
+        sorted(
+          resolveLorebookGenerationTriggers({ regenerateMessageId: "m1", regenerateMessageRole: "user" }, "roleplay"),
+        ),
+        ["impersonate", "regenerate", "roleplay", "swipe"],
+      );
+      assert.deepEqual(
+        sorted(resolveLorebookGenerationTriggers({ impersonate: true, regenerateMessageId: "m1" }, "conversation")),
+        ["conversation", "impersonate", "regenerate", "swipe"],
+      );
+      assert.deepEqual(
+        sorted(
+          resolveLorebookGenerationTriggers(
+            { regenerateMessageId: "m1", regenerateMessageRole: "assistant" },
+            "roleplay",
+          ),
+        ),
+        ["regenerate", "roleplay", "swipe"],
+      );
+      assert.deepEqual(sorted(resolveLorebookGenerationTriggers({ userMessage: "hi" }, "roleplay")), [
+        "chat",
+        "roleplay",
+      ]);
+
+      const generateRouteSource = readFileSync(
+        new URL("../../packages/server/src/routes/generate.routes.ts", import.meta.url),
+        "utf8",
+      );
+      const dryRunRouteSource = readFileSync(
+        new URL("../../packages/server/src/routes/generate/dry-run-route.ts", import.meta.url),
+        "utf8",
+      );
+      assert.match(
+        generateRouteSource,
+        /resolveLorebookGenerationTriggers\(\s*\{ \.\.\.input, regenerateMessageRole \},\s*chatMode,?\s*\)/,
+      );
+      assert.match(dryRunRouteSource, /regenerateMessageRole: regenerateMessageId\s*\?/);
+      assert.match(
+        dryRunRouteSource,
+        /if \(input\.impersonate \|\| input\.regenerateMessageRole === "user"\) triggers\.add\("impersonate"\);/,
       );
     },
   },
