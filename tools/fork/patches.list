@@ -6,7 +6,6 @@
 # Document every entry in PATCHES.md.
 
 patch/mari-unsandboxed-shell
-patch/capability-relink-node-modules
 patch/fork-upstream-diagnostics
 patch/ambient-sky
 patch/game-widget-tags-persist
