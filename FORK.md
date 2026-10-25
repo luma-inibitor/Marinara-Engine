@@ -46,7 +46,17 @@ tools/fork/apply-patches.sh --check
 
 (The `.sh` is a thin launcher; the logic lives in `tools/fork/apply-patches.mjs`, plain Node with no dependencies — the repo already requires Node ≥ 24.)
 
-It pushes nothing — it prints the exact push commands when the result looks right. On a real conflict it stops with the failing patch and the commands to resolve it. Re-running with `--no-fetch` picks up a resolved **rebase** (that phase is idempotent), but it does **not** resume a resolved **rebuild**: the rebuild starts with `git checkout -B <integration> <base>`, so it discards what you just resolved and stops at the same conflict again. Finish that phase by cherry-picking the queue's remaining entries by hand — the conflict message lists them. Note also that `tools/` is not in the working tree mid-rebuild (`patch/fork-tooling` applies last), so relaunch the script by absolute path. Conflicts that are only in `CHANGELOG.md` are resolved automatically (keeping upstream's copy), since nearly every upstream commit touches that file.
+It pushes nothing — it prints the exact push commands when the result looks right. On a real conflict it stops with the failing patch and the commands to resolve it. Re-running with `--no-fetch` picks up a resolved **rebase** (that phase is idempotent), but it does **not** resume a resolved **rebuild**: the rebuild starts with `git checkout -B <integration> <base>`, so it discards what you just resolved and stops at the same conflict again. Finish that phase by cherry-picking the queue's remaining entries by hand — the conflict message lists them. Note also that `tools/fork/` exists only on `patch/fork-tooling`, so it vanishes from the working tree as soon as the script checks out the first patch branch, and stays gone through every rebase stop and the rebuild until `patch/fork-tooling` applies last. Run the script from a copy outside the tree so every relaunch finds it:
+
+```sh
+S=$(mktemp -d)
+git show patch/fork-tooling:tools/fork/apply-patches.mjs > "$S/apply-patches.mjs"
+git show patch/fork-tooling:tools/fork/patches.list      > "$S/patches.list"
+FORK_PATCH_LIST="$S/patches.list" node "$S/apply-patches.mjs"             # first run
+FORK_PATCH_LIST="$S/patches.list" node "$S/apply-patches.mjs" --no-fetch  # after each resolved conflict
+```
+
+Conflicts that are only in `CHANGELOG.md` are resolved automatically (keeping upstream's copy), since nearly every upstream commit touches that file.
 
 Three guards protect against rebuilding from stale state — the failure mode that has twice dropped pushed commits:
 
@@ -155,6 +165,8 @@ pnpm check                                    # TypeScript + ESLint + build
 pnpm regression:professor-mari-shell-sandbox  # for the shell patch specifically
 ```
 
+On a host with no native Node ≥ 24 or pnpm (the Docker host below), prefix each command with `tools/fork/in-node.sh`, which runs it in the Dockerfile's own builder image: `tools/fork/in-node.sh pnpm check`. The sync script's `--check` calls a bare `pnpm`, so leave it off there and validate this way after the rebuild.
+
 ## Running on Android / Termux
 
 The stock `start-termux.sh` auto-updates only `main`/`staging` and lives _inside_ the repo (so it changes when you switch branches). The switcher in [`tools/termux/`](./tools/termux/) works around this: it runs two clones (`~/Marinara-fork` on `luma/staging` and `~/Marinara-main` on stock `staging`) that share one data directory (`~/marinara-data`), so you flip between fork and mainline instantly with identical chats, launched from Termux:Widget home-screen icons.
@@ -167,3 +179,35 @@ bash "$HOME/Marinara-fork/tools/termux/install.sh"
 ```
 
 See [`tools/termux/README.md`](./tools/termux/README.md) for full details, including how it migrates your existing APK-clone chats into the shared data directory. Key facts it relies on: the file-native store lives at `<DATA_DIR>/storage/tables/*.json` (default `packages/server/data`), and the APK is only a WebView viewer on port 7860 — its "Install / Start" button force-checks-out the stock release tag, so start the server with the switcher instead.
+
+## Running on a Docker host (beebox)
+
+The home server runs Marinara from a Docker image instead of a native install. Three things differ from a dev machine or Termux:
+
+**No native toolchain.** The host has an older system Node and no pnpm. The sync script is plain Node with no dependencies and runs fine on the host's Node, but `pnpm` does not exist there. Validate with `tools/fork/in-node.sh pnpm install --frozen-lockfile && tools/fork/in-node.sh pnpm check` (see [Validating](#validating-after-any-sync-or-new-patch)), and drop `--check` from the sync script. The full suite runs the same way (`tools/fork/in-node.sh node ./scripts/run-regressions.mjs`, about 20 minutes). Under full-suite load a few timing-sensitive lanes (the multiplayer and shutdown ones) can fail, so rerun each failure alone with `--filter` before suspecting a patch. Two lanes fail in the container on stock `staging` too, as of 601fc97ff: `dottore-auto-dispatch` and `storage-writer-lock`.
+
+**Two remotes to keep in step.** In the beebox checkout (`~/code/luma/Marinara-Engine`), `origin` is a local bare repo (`~/git/luma/Marinara-Engine.git`), not GitHub, but the deploy builds from the GitHub fork. The sync script's freshness guard and dropped-commit audit only look at `origin`, so a stale bare repo can hide work that only GitHub has. Before syncing, fetch GitHub and confirm it agrees with `origin`:
+
+```sh
+git fetch --prune https://github.com/luma-inibitor/Marinara-Engine '+refs/heads/*:refs/remotes/gh/*'
+for b in luma/staging $(git show origin/patch/fork-tooling:tools/fork/patches.list | grep -v '^#' | grep .); do
+  [ "$(git rev-parse -q --verify origin/$b)" = "$(git rev-parse -q --verify gh/$b)" ] || echo "DIFFERS: $b"
+done
+```
+
+Reconcile anything that differs before running the script. After the script's printed pushes to `origin`, push the same branches to GitHub with leases on what GitHub had:
+
+```sh
+args=(); for b in staging luma/staging <every patch/* in the queue>; do
+  args+=("--force-with-lease=$b:$(git rev-parse gh/$b)" "refs/heads/$b:refs/heads/$b")
+done
+git push https://github.com/luma-inibitor/Marinara-Engine "${args[@]}"
+```
+
+**Deploying is an image build.** `~/.local/bin/marinara` (outside the repo) is the host's switcher, the Docker counterpart of `tools/termux/`:
+
+- `marinara fork` updates `~/Marinara-fork` to GitHub's `luma/staging`; `marinara main` updates `~/Marinara-main` to stock `staging`. So **push to GitHub before deploying**, or the build reuses the old code.
+- It builds the image as `marinara:<channel>-next` while the old server keeps running, takes a live backup through `POST /api/backup` (aborting with the old server still up if that fails), tags the outgoing image `marinara:<channel>-<old sha>` for rollback, then swaps the new image in with `docker compose -f ~/marinara/compose.yml up -d`. The restart is the only downtime, a few seconds.
+- Both channels share `~/marinara-data` (bind-mounted as the container's data directory), so the storage-format warning above applies: check `storage-format.json` on the new base before deploying a sync that bumps it.
+- Roll back with `MARINARA_IMAGE=marinara:fork-<old sha> docker compose -f ~/marinara/compose.yml up -d`. `marinara status` prints the channel and the commit it was built from.
+- Container settings (env vars such as `REQUIRE_AUTH_FOR_LOOPBACK_PROXY`) live in `~/marinara/compose.yml`, secrets in `~/marinara/secrets.env`; both survive deploys.
