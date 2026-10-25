@@ -520,10 +520,10 @@ console.log(
 console.log(`  ${dim("Review:")} git log --oneline ${baseBranch}..${opts.into}`);
 console.log(`  ${dim("Diff  :")} git diff ${baseBranch}...${opts.into}`);
 console.log(`
-Nothing has been pushed. When it looks right:
-    git push --force-with-lease --force-if-includes origin ${baseBranch}
-${patches.map((p) => `    git push --force-with-lease --force-if-includes origin ${p}`).join("\n")}
-    git push --force-with-lease --force-if-includes origin ${opts.into}
+Nothing has been pushed. When it looks right, push everything with:
+    tools/fork/push-sync.sh
 
-(--force-if-includes refuses the push if origin gained commits your local
-branch never integrated — the second net under the freshness guard.)`);
+It pushes ${baseBranch}, the ${patches.length} patch branches and ${opts.into} to origin and
+any fork.mirror remotes with --force-with-lease --force-if-includes, which
+refuses the push if a remote gained commits your local branch never
+integrated — the second net under the freshness guard.`);
