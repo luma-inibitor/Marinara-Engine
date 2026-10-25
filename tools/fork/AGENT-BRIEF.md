@@ -42,7 +42,7 @@ When the patch is done, carry it into `luma/staging` in the same pass, with no P
    ```sh
    tools/fork/apply-patches.sh --base origin/staging --check
    ```
-   It rebases the queue and rebuilds `luma/staging` on the current base. It pushes nothing itself; run the push commands it prints. Run `tools/fork/apply-patches.sh --help` for flags.
+   It rebases the queue and rebuilds `luma/staging` on the current base. It pushes nothing itself; after validating, push with `tools/fork/push-sync.sh` (force-pushing here is standard procedure, no need to ask). Run `tools/fork/apply-patches.sh --help` for flags.
 
 ## Validating
 
