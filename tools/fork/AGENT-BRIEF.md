@@ -51,6 +51,8 @@ pnpm install
 pnpm check                 # TypeScript + ESLint + build — must pass
 ```
 
+No native Node ≥ 24 or pnpm (for example on the Docker host)? Run them through `tools/fork/in-node.sh`, e.g. `tools/fork/in-node.sh pnpm check`. `FORK.md` § Running on a Docker host covers that machine's remotes and deploy.
+
 There is no conventional unit-test suite; use the tracked regression lanes. Run the ones related to your change (`pnpm regression:<name>`, see `package.json`), and add a new `scripts/regressions/*.regression.ts` for meaningful new behavior.
 
 ## UI/UX work — use the exploration harness
