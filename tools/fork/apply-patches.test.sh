@@ -9,6 +9,8 @@
 #   T2  diverged local patch branch -> hard stop
 #   T3  hotfix commit only on origin/<integration> -> audit hard stop; --skip-audit proceeds
 #   T4  CHANGELOG-only conflict auto-resolved during rebase
+#   T5  upstream adopts a patch
+#   P1-P3  push-sync.mjs: push to origin + mirror; refuse a stale rebuild; refuse mirror-only work
 set -euo pipefail
 SCRIPT="${1:-$(cd "$(dirname "$0")" && pwd)/apply-patches.mjs}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/forksync.XXXXXX")"
@@ -110,6 +112,43 @@ cd "$WORK/clone"
 if node "$SCRIPT" --base upstream/staging >"$WORK/t5.log" 2>&1; then report 0 "run succeeds"; else report 1 "run succeeds"; sed -n '1,60p' "$WORK/t5.log"; fi
 grep -q "EMPTY" "$WORK/t5.log" && report 0 "patch/one reported EMPTY (adopted)" || report 1 "patch/one reported EMPTY (adopted)"
 [ "$(git show luma/staging:feature-a.txt)" = "A1" ] && report 0 "feature A present via upstream" || report 1 "feature A present via upstream"
+
+PUSH="$(dirname "$SCRIPT")/push-sync.mjs"
+add_mirror(){ # a second remote seeded with origin's branches, registered as a fork mirror
+  rm -rf "$WORK/mi.git"; git clone -q --bare "$WORK/or.git" "$WORK/mi.git"
+  git remote add mirror "$WORK/mi.git"; git config --add fork.mirror mirror; git fetch -q mirror
+}
+same_tips(){ # same_tips <bare repo> : every pushed branch matches the clone
+  for b in staging patch/one patch/two patch/tools luma/staging; do
+    [ "$(git -C "$1" rev-parse "$b")" = "$(git rev-parse "$b")" ] || return 1
+  done
+}
+
+echo "== P1: push-sync pushes a fresh rebuild to origin and the mirror =="
+build_fixture; add_mirror
+node "$SCRIPT" --base upstream/staging >"$WORK/p1a.log" 2>&1 || { report 1 "rebuild for P1"; sed -n '1,40p' "$WORK/p1a.log"; }
+if node "$PUSH" >"$WORK/p1.log" 2>&1; then report 0 "push succeeds"; else report 1 "push succeeds"; sed -n '1,40p' "$WORK/p1.log"; fi
+same_tips "$WORK/or.git" && report 0 "origin matches the rebuild" || report 1 "origin matches the rebuild"
+same_tips "$WORK/mi.git" && report 0 "mirror matches the rebuild" || report 1 "mirror matches the rebuild"
+
+echo "== P2: push-sync refuses a rebuild that is out of date =="
+build_fixture
+node "$SCRIPT" --base upstream/staging >"$WORK/p2a.log" 2>&1 || report 1 "rebuild for P2"
+git checkout -q patch/one; commit "one: after the rebuild" late.txt "z"; git checkout -q luma/staging
+before=$(git -C "$WORK/or.git" rev-parse luma/staging)
+if node "$PUSH" >"$WORK/p2.log" 2>&1; then report 1 "stale rebuild must not push"; else report 0 "stale rebuild refused"; fi
+grep -q "patch/one differs" "$WORK/p2.log" && report 0 "stale patch named" || report 1 "stale patch named"
+[ "$(git -C "$WORK/or.git" rev-parse luma/staging)" = "$before" ] && report 0 "origin untouched" || report 1 "origin untouched"
+
+echo "== P3: push-sync refuses when the mirror has work origin lacks =="
+build_fixture; add_mirror
+cd "$WORK/seed"; git checkout -q patch/two; commit "two: mirror only" mirror.txt "m"; git push -q "$WORK/mi.git" patch/two
+cd "$WORK/clone"
+node "$SCRIPT" --base upstream/staging >"$WORK/p3a.log" 2>&1 || report 1 "rebuild for P3"
+before=$(git -C "$WORK/or.git" rev-parse luma/staging)
+if node "$PUSH" >"$WORK/p3.log" 2>&1; then report 1 "mirror-only work must stop the push"; else report 0 "mirror-only work stops the push"; fi
+grep -q "patch/two" "$WORK/p3.log" && report 0 "branch named" || report 1 "branch named"
+[ "$(git -C "$WORK/or.git" rev-parse luma/staging)" = "$before" ] && report 0 "origin untouched" || report 1 "origin untouched"
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
