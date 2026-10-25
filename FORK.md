@@ -46,7 +46,7 @@ tools/fork/apply-patches.sh --check
 
 (The `.sh` is a thin launcher; the logic lives in `tools/fork/apply-patches.mjs`, plain Node with no dependencies — the repo already requires Node ≥ 24.)
 
-It pushes nothing — it prints the exact push commands when the result looks right. On a real conflict it stops with the failing patch and the commands to resolve it. Re-running with `--no-fetch` picks up a resolved **rebase** (that phase is idempotent), but it does **not** resume a resolved **rebuild**: the rebuild starts with `git checkout -B <integration> <base>`, so it discards what you just resolved and stops at the same conflict again. Finish that phase by cherry-picking the queue's remaining entries by hand — the conflict message lists them. Note also that `tools/fork/` exists only on `patch/fork-tooling`, so it vanishes from the working tree as soon as the script checks out the first patch branch, and stays gone through every rebase stop and the rebuild until `patch/fork-tooling` applies last. Run the script from a copy outside the tree so every relaunch finds it:
+It pushes nothing. When the result looks right (and is validated), push it with `tools/fork/push-sync.sh`; see [Pushing a sync](#pushing-a-sync). On a real conflict it stops with the failing patch and the commands to resolve it. Re-running with `--no-fetch` picks up a resolved **rebase** (that phase is idempotent), but it does **not** resume a resolved **rebuild**: the rebuild starts with `git checkout -B <integration> <base>`, so it discards what you just resolved and stops at the same conflict again. Finish that phase by cherry-picking the queue's remaining entries by hand — the conflict message lists them. Note also that `tools/fork/` exists only on `patch/fork-tooling`, so it vanishes from the working tree as soon as the script checks out the first patch branch, and stays gone through every rebase stop and the rebuild until `patch/fork-tooling` applies last. Run the script from a copy outside the tree so every relaunch finds it:
 
 ```sh
 S=$(mktemp -d)
@@ -62,7 +62,18 @@ Three guards protect against rebuilding from stale state — the failure mode th
 
 - **It fetches `origin` as well as `upstream`**, then compares every local patch branch to its `origin/*` counterpart: a branch that is strictly behind is fast-forwarded automatically; a branch that has truly diverged (origin holds commits this clone never integrated, judged by the branch reflog — the same rule as `git push --force-if-includes`) stops the run with reconciliation steps.
 - **It audits the old integration branch before overwriting it**: any commit on `origin/luma/staging` since the previous stamp with no equivalent (by patch-id, then by subject) in the patch queue is listed and stops the run — that is a hotfix that landed on the integration branch but never made it back to its patch branch, and rebuilding would silently drop it. Commits whose diff is only `CHANGELOG.md`, and commits upstream has since adopted, are exempt — those disappear legitimately. `--skip-audit` overrides when dropping is intentional.
-- **The push commands it prints use `--force-with-lease --force-if-includes`**, so even a push issued later from this clone refuses to overwrite work that was fetched but never integrated.
+- **`push-sync.sh` pushes with `--force-with-lease --force-if-includes`**, so even a push issued later from this clone refuses to overwrite work that was fetched but never integrated.
+
+### Pushing a sync
+
+Force-pushing the rebuilt branches is the standard last step of every sync, not a judgment call. Use the script, not hand-typed pushes:
+
+```sh
+tools/fork/push-sync.sh --dry-run   # optional: show what would move
+tools/fork/push-sync.sh
+```
+
+It refuses unless `luma/staging`'s `fork-base.json` names the local `staging` and every local patch head (so it can't push a half-finished or stale rebuild). It then fetches `origin` and each mirror remote, refuses if a mirror holds a branch tip `origin` lacks, and pushes `staging`, every queued patch branch and `luma/staging` to `origin` and then to each mirror, all with `--force-with-lease --force-if-includes`. Mirrors are remotes named in `git config fork.mirror` (none by default; see the Docker host section).
 
 Useful flags: `--list` (show the queue), `--base <ref>` (default `upstream/staging`), `--into <branch>` (default `luma/staging`), `--no-fetch`, `--skip-audit`.
 
@@ -127,7 +138,7 @@ A new patch goes straight into `luma/staging` in one pass, with no review PR and
 
 2. On `patch/fork-tooling`, add the branch to `tools/fork/patches.list` (before `patch/fork-tooling`, which stays last) and add its section to [`PATCHES.md`](./PATCHES.md). Commit it.
 
-3. Rebuild `luma/staging` on the current base, then run the push commands the script prints:
+3. Rebuild `luma/staging` on the current base, validate, then push with `tools/fork/push-sync.sh`:
 
    ```sh
    tools/fork/apply-patches.sh --base origin/staging --check
@@ -186,23 +197,14 @@ The home server runs Marinara from a Docker image instead of a native install. T
 
 **No native toolchain.** The host has an older system Node and no pnpm. The sync script is plain Node with no dependencies and runs fine on the host's Node, but `pnpm` does not exist there. Validate with `tools/fork/in-node.sh pnpm install --frozen-lockfile && tools/fork/in-node.sh pnpm check` (see [Validating](#validating-after-any-sync-or-new-patch)), and drop `--check` from the sync script. The full suite runs the same way (`tools/fork/in-node.sh node ./scripts/run-regressions.mjs`, about 20 minutes). Under full-suite load a few timing-sensitive lanes (the multiplayer and shutdown ones) can fail, so rerun each failure alone with `--filter` before suspecting a patch. Two lanes fail in the container on stock `staging` too, as of 601fc97ff: `dottore-auto-dispatch` and `storage-writer-lock`.
 
-**Two remotes to keep in step.** In the beebox checkout (`~/code/luma/Marinara-Engine`), `origin` is a local bare repo (`~/git/luma/Marinara-Engine.git`), not GitHub, but the deploy builds from the GitHub fork. The sync script's freshness guard and dropped-commit audit only look at `origin`, so a stale bare repo can hide work that only GitHub has. Before syncing, fetch GitHub and confirm it agrees with `origin`:
+**Two remotes to keep in step.** In the beebox checkout (`~/code/luma/Marinara-Engine`), `origin` is a local bare repo (`~/git/luma/Marinara-Engine.git`), not GitHub, but the deploy builds from the GitHub fork. The sync script's freshness guard and dropped-commit audit only look at `origin`, so the GitHub fork is set up as a mirror remote, which `push-sync.sh` checks and pushes to after `origin`:
 
 ```sh
-git fetch --prune https://github.com/luma-inibitor/Marinara-Engine '+refs/heads/*:refs/remotes/gh/*'
-for b in luma/staging $(git show origin/patch/fork-tooling:tools/fork/patches.list | grep -v '^#' | grep .); do
-  [ "$(git rev-parse -q --verify origin/$b)" = "$(git rev-parse -q --verify gh/$b)" ] || echo "DIFFERS: $b"
-done
+git remote add gh https://github.com/luma-inibitor/Marinara-Engine
+git config --add fork.mirror gh
 ```
 
-Reconcile anything that differs before running the script. After the script's printed pushes to `origin`, push the same branches to GitHub with leases on what GitHub had:
-
-```sh
-args=(); for b in staging luma/staging <every patch/* in the queue>; do
-  args+=("--force-with-lease=$b:$(git rev-parse gh/$b)" "refs/heads/$b:refs/heads/$b")
-done
-git push https://github.com/luma-inibitor/Marinara-Engine "${args[@]}"
-```
+Before a sync, `git fetch gh` and check that `git log --oneline origin/luma/staging...gh/luma/staging` is empty; reconcile anything GitHub alone has before rebuilding. `push-sync.sh` refuses to push over such commits either way.
 
 **Deploying is an image build.** `~/.local/bin/marinara` (outside the repo) is the host's switcher, the Docker counterpart of `tools/termux/`:
 
