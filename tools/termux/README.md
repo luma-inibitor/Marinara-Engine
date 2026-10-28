@@ -10,8 +10,6 @@ Tooling to run this fork *and* stock upstream side-by-side on Android/Termux, sw
 - `~/.local/bin/marinara` — the switcher command (lives outside the repos on purpose, so switching never rewrites it)
 - `~/.shortcuts/Marinara Fork` and `~/.shortcuts/Marinara Mainline` — [Termux:Widget](https://f-droid.org/packages/com.termux.widget/) home-screen shortcuts
 
-The fork clone's `.env` also gets `MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL=true` so Professor Mari's `bash` tool works on-device (see [`../../PATCHES.md`](../../PATCHES.md)).
-
 ## Install
 
 In Termux:
@@ -35,7 +33,7 @@ Then install **Termux:Widget** from F-Droid and add its widget to your home scre
 `marinara dev <owner/repo> <branch> [--copy-data]` spins up a **one-off** checkout of any repo/branch to test it — for example a PR branch or someone else's fork:
 
 ```sh
-marinara dev luma-inibitor/Marinara-Engine patch/mari-unsandboxed-shell
+marinara dev luma-inibitor/Marinara-Engine patch/ambient-sky
 marinara dev luma-inibitor/Marinara-Engine claude/chat-search-ui-ux-h6qgyu --copy-data
 ```
 
