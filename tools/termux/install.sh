@@ -84,12 +84,11 @@ else
 fi
 
 # ── 3. .env for both clones ──
-step "Writing .env (shared DATA_DIR; unsandboxed shell only on the fork)"
+step "Writing .env (shared DATA_DIR)"
 set_env_var "$FORK_DIR/.env" DATA_DIR "$DATA_DIR_SHARED"
-set_env_var "$FORK_DIR/.env" MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL true
-ok "Fork .env → DATA_DIR + MARINARA_MARI_ALLOW_UNSANDBOXED_SHELL=true"
+ok "Fork .env → DATA_DIR"
 set_env_var "$MAIN_DIR/.env" DATA_DIR "$DATA_DIR_SHARED"
-ok "Mainline .env → DATA_DIR (flag omitted; stock code ignores it anyway)"
+ok "Mainline .env → DATA_DIR"
 
 # ── 4. Install the switcher command ──
 step "Installing the 'marinara' command to $BIN_DIR"
