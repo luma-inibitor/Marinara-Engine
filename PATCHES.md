@@ -48,11 +48,12 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 
 ### `patch/game-widget-tags-persist`
 
-- **What:** Saves the GM's `[widget: ...]` HUD tags to the chat. The tag path in `GameSurface.tsx` applied each update to the HUD store and the cached chat only, so the next chat refetch put the stale server copy back, and the GM prompt, which reads `gameWidgetState` from the server, never saw its own checklist, gauge or stat changes. The tag path now calls `useUpdateGameWidgets()`, the mutation the widget editor already uses: it PUTs `/game/:chatId/widgets` and registers the pending write so hydration does not overwrite it. The local-only `syncHudWidgetsToChatCache` helper is removed.
+- **What:** Saves the GM's `[widget: ...]` HUD tags to the chat. The tag path in `GameSurface.tsx` applied each update to the HUD store and the cached chat only, so the next chat refetch put the stale server copy back, and the GM prompt, which reads `gameWidgetState` from the server, never saw its own checklist, gauge or stat changes. The tag path now calls `useUpdateGameWidgets()`, the mutation the widget editor already uses: it PUTs `/game/:chatId/widgets` and registers the pending write so hydration does not overwrite it. The local-only `syncHudWidgetsToChatCache` helper stays, because upstream's party health widget sync uses it.
 - **Why forked:** Found in a live game chat whose checklist never kept a GM update across four turns. Upstream has the same code.
 - **Upstream status:** Not yet submitted (candidate). Upstream bug, self-contained, one file.
 - **Note:** the widgets PUT enforces the 4-widget cap. A chat whose `gameWidgetState` holds more than 4 (only reachable by writing metadata directly) gets a 400 on every GM widget update until it is trimmed.
 - **Staging rebase note (82d8d68f2):** the patch dropped the `patchChatMetadata` import along with the cache-only widget sync it replaced. Upstream now imports it for a new inventory cache sync in the same file, so the import stays.
+- **Staging rebase note (2026-10-28, a3f34f0d9):** upstream's `f8f502d74` (a party health widget follows the sheets) calls `syncHudWidgetsToChatCache`, which this patch used to delete, so the client build failed. Resolution: keep the helper. The GM tag path still saves through `useUpdateGameWidgets()`; the health sync stays cache-only, as upstream wrote it.
 - **Touches:** `packages/client/src/components/game/GameSurface.tsx`.
 
 ### `patch/game-weather-during-generation`
