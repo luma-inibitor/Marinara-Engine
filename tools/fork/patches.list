@@ -5,7 +5,6 @@
 # Edit this to enable/disable a patch, then run tools/fork/apply-patches.sh.
 # Document every entry in PATCHES.md.
 
-patch/mari-unsandboxed-shell
 patch/fork-upstream-diagnostics
 patch/ambient-sky
 patch/game-widget-tags-persist
