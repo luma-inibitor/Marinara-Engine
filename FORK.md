@@ -107,10 +107,10 @@ git checkout -B main    upstream/main    && git push --force-with-lease origin m
 
 # 2. Rebase each patch branch onto the new base (resolve conflicts here).
 #    Start each rebase from origin's tip, not a possibly-stale local branch.
-git checkout -B patch/mari-unsandboxed-shell origin/patch/mari-unsandboxed-shell
+git checkout -B patch/ambient-sky origin/patch/ambient-sky
 git rebase staging
 pnpm install && pnpm check          # validate the rebased patch still builds
-git push --force-with-lease --force-if-includes origin patch/mari-unsandboxed-shell
+git push --force-with-lease --force-if-includes origin patch/ambient-sky
 
 # 3. Rebuild the integration branch from the refreshed base + patches
 git checkout -B luma/staging staging
@@ -173,7 +173,6 @@ Each `PATCHES.md` section records what it does, why it's forked, its upstream st
 ```sh
 pnpm install
 pnpm check                                    # TypeScript + ESLint + build
-pnpm regression:professor-mari-shell-sandbox  # for the shell patch specifically
 ```
 
 On a host with no native Node ≥ 24 or pnpm (the Docker host below), prefix each command with `tools/fork/in-node.sh`, which runs it in the Dockerfile's own builder image: `tools/fork/in-node.sh pnpm check`. The sync script's `--check` calls a bare `pnpm`, so leave it off there and validate this way after the rebuild.
