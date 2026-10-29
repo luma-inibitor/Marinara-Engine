@@ -102,6 +102,7 @@ import {
   measureContextBudget,
   withLlmRequestTimeout,
   type ChatOptions,
+  yieldToEventLoop,
 } from "./llm/base-provider.js";
 import { withConnectionThinkingHeadroom } from "./generation/agent-generation-parameters.js";
 import { normalizeGemma4Delimiters } from "./llm/textual-tool-call-parser.js";
@@ -1564,6 +1565,8 @@ export function createAdvancedMemoryService(db: DB, { includeExcerptsInStatus = 
     source: readonly AdvancedMemoryMessage[],
     options: AdvancedMemoryOperationOptions,
   ) {
+    // Every write rechecks the chat here; giving other requests a turn keeps a long run from freezing the server.
+    await yieldToEventLoop();
     abortIfNeeded(options.signal);
     const fresh = await context(ctx.chatId);
     if (!fresh.settings.enabled) throw new Error("Advanced Memory was disabled");
