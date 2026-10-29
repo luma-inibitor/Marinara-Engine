@@ -454,6 +454,15 @@ function object(value: unknown): Metadata {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Metadata) : {};
 }
 
+/** Generation records in a message's extras that memory never reads, and the bulk of a long chat's extras. */
+const UNREAD_EXTRA_KEYS = new Set([
+  "cachedPrompt",
+  "lorebookScan",
+  "advancedMemorySnapshot",
+  "generationInfo",
+  "thinking",
+]);
+
 function strings(value: unknown): string[] {
   if (typeof value === "string") {
     try {
@@ -1283,22 +1292,29 @@ export function createAdvancedMemoryService(db: DB, { includeExcerptsInStatus = 
   // extras would stay pinned even after the file store evicts that chat.
   // ponytail: a fixed 4-chat LRU bounds the cache without hooking chat deletion, so a
   // deleted chat lingers until four other chats are read; clear it on delete if that matters.
+  // The cache keeps a copy without generation records: keeping long chats' extras whole would
+  // hold hundreds of megabytes. The copy is frozen at the top level only: nested values such as
+  // attachments are shared and must not be edited.
   const parsedMessageExtraChats = 4;
-  const parsedMessageExtras = new Map<string, Map<string, { raw: unknown; parsed: Metadata }>>();
+  const parsedMessageExtras = new Map<string, Map<string, { raw: unknown; parsed: Readonly<Metadata> }>>();
 
-  function parsedMessageExtra(chatId: string, message: { id: string; extra?: unknown }): Metadata {
-    const byMessage = parsedMessageExtras.get(chatId) ?? new Map<string, { raw: unknown; parsed: Metadata }>();
+  function parsedMessageExtra(chatId: string, message: { id: string; extra?: unknown }): Readonly<Metadata> {
+    const byMessage =
+      parsedMessageExtras.get(chatId) ?? new Map<string, { raw: unknown; parsed: Readonly<Metadata> }>();
     parsedMessageExtras.set(chatId, byMessage);
     const cached = byMessage.get(message.id);
     if (cached && cached.raw === message.extra) return cached.parsed;
 
-    const parsed = object(message.extra);
+    const parsed = Object.freeze(
+      Object.fromEntries(Object.entries(object(message.extra)).filter(([key]) => !UNREAD_EXTRA_KEYS.has(key))),
+    );
     byMessage.set(message.id, { raw: message.extra, parsed });
     return parsed;
   }
 
   function pruneParsedMessageExtras(chatId: string, messages: readonly { id: string }[]) {
-    const byMessage = parsedMessageExtras.get(chatId) ?? new Map<string, { raw: unknown; parsed: Metadata }>();
+    const byMessage =
+      parsedMessageExtras.get(chatId) ?? new Map<string, { raw: unknown; parsed: Readonly<Metadata> }>();
     const liveIds = new Set(messages.map((message) => message.id));
     for (const id of byMessage.keys()) {
       if (!liveIds.has(id)) byMessage.delete(id);
