@@ -402,20 +402,36 @@ function object(value: unknown): Metadata {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Metadata) : {};
 }
 
-/** Parsed message extras per chat, reused while the stored JSON string is unchanged. */
-const parsedExtras = new WeakMap<DB, Map<string, Map<string, { raw: unknown; extra: Metadata }>>>();
+type ParsedExtra = { raw: unknown; extra: Readonly<Metadata> };
+/** Parsed message extras per chat, reused while the stored JSON text is unchanged. */
+const parsedExtras = new WeakMap<DB, Map<string, Map<string, ParsedExtra>>>();
 const PARSED_EXTRA_CHATS = 2;
+/** Generation records in a message's extras that memory never reads, and the bulk of a long chat's extras. */
+const UNREAD_EXTRA_KEYS = new Set([
+  "cachedPrompt",
+  "lorebookScan",
+  "advancedMemorySnapshot",
+  "generationInfo",
+  "thinking",
+]);
 
-// A long chat stores megabytes of extras (cached prompts, scans). Parsing them all
-// for every context made one preparation run freeze the server for a minute.
-function messageExtras(db: DB, chatId: string, messages: readonly { id: string; extra?: unknown }[]): Metadata[] {
-  const chats = parsedExtras.get(db) ?? new Map<string, Map<string, { raw: unknown; extra: Metadata }>>();
+// A long chat stores megabytes of extras. Parsing them all for every context made one
+// preparation run freeze the server for a minute; keeping them whole would hold that much in memory.
+// The stored text kept for comparison is the store's own string while the chat is resident. The copy
+// is frozen at the top level only: nested values such as attachments are shared and must not be edited.
+function messageExtras(db: DB, chatId: string, messages: readonly { id: string; extra?: unknown }[]) {
+  const chats = parsedExtras.get(db) ?? new Map<string, Map<string, ParsedExtra>>();
   parsedExtras.set(db, chats);
   const previous = chats.get(chatId);
-  const current = new Map<string, { raw: unknown; extra: Metadata }>();
+  const current = new Map<string, ParsedExtra>();
   const extras = messages.map((message) => {
     const cached = previous?.get(message.id);
-    const extra = cached && cached.raw === message.extra ? cached.extra : object(message.extra);
+    const extra =
+      cached && cached.raw === message.extra
+        ? cached.extra
+        : Object.freeze(
+            Object.fromEntries(Object.entries(object(message.extra)).filter(([key]) => !UNREAD_EXTRA_KEYS.has(key))),
+          );
     current.set(message.id, { raw: message.extra, extra });
     return extra;
   });
