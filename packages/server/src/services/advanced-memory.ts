@@ -97,7 +97,12 @@ import {
   messageEnds,
 } from "./advanced-memory-decisions.js";
 import { cosineSimilarity } from "./lorebook/embeddings.js";
-import { contextWindowForInputBudget, measureContextBudget, withLlmRequestTimeout } from "./llm/base-provider.js";
+import {
+  contextWindowForInputBudget,
+  measureContextBudget,
+  withLlmRequestTimeout,
+  yieldToEventLoop,
+} from "./llm/base-provider.js";
 import { normalizeGemma4Delimiters } from "./llm/textual-tool-call-parser.js";
 import { resolveModelAccessPolicy } from "./generation/model-access-policy.js";
 import { completeAgentCall } from "./agents/agent-progress.js";
@@ -1450,6 +1455,8 @@ export function createAdvancedMemoryService(db: DB, { includeExcerptsInStatus = 
     source: readonly AdvancedMemoryMessage[],
     options: AdvancedMemoryOperationOptions,
   ) {
+    // Every write rechecks the chat here; giving other requests a turn keeps a long run from freezing the server.
+    await yieldToEventLoop();
     abortIfNeeded(options.signal);
     const fresh = await context(ctx.chatId);
     if (!fresh.settings.enabled) throw new Error("Advanced Memory was disabled");
