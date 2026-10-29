@@ -1004,7 +1004,7 @@ function messageText(ctx: Context, message: AdvancedMemoryMessage, index: number
 }
 
 function logMessages(ctx: Context, messages: readonly AdvancedMemoryMessage[], includeVisibility = false): string {
-  const indexes = new Map(ctx.messages.map((message, index) => [message.id, index]));
+  const { indexes } = messageLookup(ctx, ctx.messages);
   const readers = includeVisibility ? visibilityReaders(ctx) : [];
   return messages
     .map((message) => {
