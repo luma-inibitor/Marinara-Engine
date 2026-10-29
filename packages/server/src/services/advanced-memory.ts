@@ -397,6 +397,29 @@ function object(value: unknown): Metadata {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Metadata) : {};
 }
 
+/** Parsed message extras per chat, reused while the stored JSON string is unchanged. */
+const parsedExtras = new WeakMap<DB, Map<string, Map<string, { raw: unknown; extra: Metadata }>>>();
+const PARSED_EXTRA_CHATS = 2;
+
+// A long chat stores megabytes of extras (cached prompts, scans). Parsing them all
+// for every context made one preparation run freeze the server for a minute.
+function messageExtras(db: DB, chatId: string, messages: readonly { id: string; extra?: unknown }[]): Metadata[] {
+  const chats = parsedExtras.get(db) ?? new Map<string, Map<string, { raw: unknown; extra: Metadata }>>();
+  parsedExtras.set(db, chats);
+  const previous = chats.get(chatId);
+  const current = new Map<string, { raw: unknown; extra: Metadata }>();
+  const extras = messages.map((message) => {
+    const cached = previous?.get(message.id);
+    const extra = cached && cached.raw === message.extra ? cached.extra : object(message.extra);
+    current.set(message.id, { raw: message.extra, extra });
+    return extra;
+  });
+  chats.delete(chatId);
+  chats.set(chatId, current);
+  for (const key of chats.keys()) if (chats.size > PARSED_EXTRA_CHATS) chats.delete(key);
+  return extras;
+}
+
 function strings(value: unknown): string[] {
   if (typeof value === "string") {
     try {
@@ -1166,10 +1189,12 @@ export function createAdvancedMemoryService(db: DB, { includeExcerptsInStatus = 
     const stored = await chats.listMessages(chatId);
     // Reuse parsed metadata across archive records. Re-parsing every message for
     // each record's audience check freezes long chats, even for a simple toggle.
-    const messages = (chat.mode === "game" ? gameAdvancedMemorySource(stored, metadata) : stored).map((message) => ({
+    const source = chat.mode === "game" ? gameAdvancedMemorySource(stored, metadata) : stored;
+    const extras = messageExtras(db, chatId, source);
+    const messages = source.map((message, index) => ({
       ...message,
       content: message.role === "user" ? parseRoleplayUserCommands(message.content).content : message.content,
-      extra: object(message.extra),
+      extra: extras[index],
     })) as AdvancedMemoryMessage[];
     const characterIds = strings(chat.characterIds);
     const names = new Map<string, string>();
