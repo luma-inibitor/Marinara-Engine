@@ -128,11 +128,19 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 
 ### `patch/advanced-memory-yield-and-cache`
 
-- **What:** Advanced Memory parses a message's stored extras once while they are unchanged, instead of once per memory write. A module-level cache, keyed by database, chat and message, keeps the two most recently read chats. It compares the stored value and holds a frozen copy without the generation records memory never reads (`cachedPrompt`, `lorebookScan`, `advancedMemorySnapshot`, `generationInfo`, `thinking`). Summary entries are normalized once per read of the chat instead of on every record check, and `logMessages` reuses the context's message index. Every snapshot check (each write passes through one) yields to the event loop first.
+- **What:** Upstream's parsed-extras cache (#8607, on staging since the 2026-11-01 sync) holds a frozen copy of each message's extras without the generation records memory never reads (`cachedPrompt`, `lorebookScan`, `advancedMemorySnapshot`, `generationInfo`, `thinking`). Our own cache commit was dropped on that sync in favor of upstream's. Summary entries are normalized once per read of the chat instead of on every record check, and `logMessages` reuses the context's message index. Every snapshot check (each write passes through one) yields to the event loop first.
 - **Why forked:** On a 971-message roleplay chat, whose messages carry 142 MB of extras, each post-reply scene check froze the server for about a minute, and a range re-scan for over 90 seconds. The file-backed store answers queries as microtasks, so a run whose scenes need no model call never let another request in, and every write re-parsed all extras (about 0.5 s each). Measured on a copy of that chat with the network stubbed: the post-reply check went from 51 s blocked to 2.5 s with a 0.2 s longest block, the range re-scan from 96 s to 5 s with a 0.7 s longest block, and `status()` from 1.2 s to 0.08 s.
 - **Upstream status:** Not yet submitted (candidate). Self-contained in `advanced-memory.ts`.
 - **Validation:** `pnpm check`; the 31 memory lanes (`run-regressions.mjs --filter memory`), including the new `advanced-memory-run-stalls` lane, which fails on the previous code (504 extra parses in one run) and on a cache that drops a key memory reads; before/after timings on a copy of the chat above with the network stubbed.
 - **Touches:** `packages/server/src/services/advanced-memory.ts`, `scripts/regressions/advanced-memory-run-stalls.regression.ts`.
+
+### `patch/swipe-edit-target`
+
+- **What:** `PATCH /:chatId/messages/:messageId?swipeIndex=N` edits the text of that swipe when it is not the shown one. Only the swipe row changes; the message row, its context and its memory are untouched. Asking for the shown swipe by index, or leaving the query off, behaves as before. Typed roleplay commands, whisper anchors and the stale raw command copy follow the same rules as a normal edit, against the swipe's own text and extras.
+- **Why forked:** The edit route could only change the shown swipe. A tool fixing alternate greetings or old rerolls had to switch each swipe in, edit it, and switch back.
+- **Upstream status:** Not yet submitted (candidate). Server only; no client change.
+- **Validation:** `pnpm check`; the new `swipe-edit-target` lane; `message-edit-delete-races`.
+- **Touches:** `packages/server/src/routes/chats.routes.ts`, `packages/server/src/services/storage/chats.storage.ts`, `scripts/regressions/swipe-edit-target.regression.ts`.
 
 ## Retired patches
 
