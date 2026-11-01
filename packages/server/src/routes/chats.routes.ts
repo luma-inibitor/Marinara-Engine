@@ -3032,14 +3032,30 @@ export async function chatsRoutes(app: FastifyInstance) {
     return { deleted };
   });
 
-  // Edit message content
-  app.patch<{ Params: { chatId: string; messageId: string } }>("/:chatId/messages/:messageId", async (req, reply) => {
-    const { content } = req.body as { content: string };
-    if (typeof content !== "string") return reply.status(400).send({ error: "content is required" });
-    const updated = await storage.updateMessageContent(req.params.messageId, content, { authored: true });
-    if (!updated) return reply.status(404).send({ error: "Message not found" });
-    return updated;
-  });
+  // Edit message content. `?swipeIndex=` edits that swipe; without it, or on the shown swipe, the edit goes to the message.
+  app.patch<{ Params: { chatId: string; messageId: string }; Querystring: { swipeIndex?: string } }>(
+    "/:chatId/messages/:messageId",
+    async (req, reply) => {
+      const { content } = req.body as { content: string };
+      if (typeof content !== "string") return reply.status(400).send({ error: "content is required" });
+      const swipeIndex = req.query.swipeIndex === undefined ? undefined : Number(req.query.swipeIndex);
+      if (swipeIndex !== undefined && (!Number.isSafeInteger(swipeIndex) || swipeIndex < 0))
+        return reply.status(400).send({ error: "Invalid swipe index" });
+      if (swipeIndex !== undefined) {
+        const message = await storage.getMessage(req.params.messageId);
+        if (!message || message.chatId !== req.params.chatId)
+          return reply.status(404).send({ error: "Message not found" });
+        const edited = await storage.updateInactiveSwipeContent(req.params.messageId, swipeIndex, content, {
+          authored: true,
+        });
+        if (!edited) return reply.status(404).send({ error: "Swipe not found" });
+        if (edited !== "active") return edited;
+      }
+      const updated = await storage.updateMessageContent(req.params.messageId, content, { authored: true });
+      if (!updated) return reply.status(404).send({ error: "Message not found" });
+      return updated;
+    },
+  );
 
   // Restore a command-owned cut only while both response and target still match its receipt.
   app.post<{ Params: { chatId: string; messageId: string } }>(
