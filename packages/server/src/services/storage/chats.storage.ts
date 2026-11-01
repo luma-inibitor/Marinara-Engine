@@ -2860,6 +2860,65 @@ export function createChatsStorage(db: DB) {
       });
     },
 
+    /**
+     * Edit the text of a swipe that is not showing. Returns "active" when `swipeIndex` is the shown swipe,
+     * whose edit belongs to updateMessageContent, and null when the message or swipe does not exist. The
+     * message row, its context and its memory are untouched: none of them read an inactive swipe.
+     */
+    async updateInactiveSwipeContent(
+      id: string,
+      swipeIndex: number,
+      content: string,
+      options: { authored?: boolean } = {},
+    ) {
+      return withPatchQueue(messageExtraPatchQueues, id, async () => {
+        const msg = await this.getMessage(id);
+        if (!msg) return null;
+        if ((msg.activeSwipeIndex ?? 0) === swipeIndex) return "active" as const;
+        const swipe = (await this.getSwipes(id)).find((s: any) => s.index === swipeIndex);
+        if (!swipe) return null;
+        const before = typeof swipe.content === "string" ? swipe.content : "";
+        const existingExtra = parseExtraRecord(swipe.extra);
+        const prepare =
+          msg.role === "user" || options.authored
+            ? await userRoleplayPreparer(msg.chatId, msg.role !== "user" && /\[whisper/iu.test(content))
+            : null;
+        const prepared = prepare?.(content, existingExtra);
+        content = prepared?.content ?? content;
+
+        // The same rules as updateMessageContent, against this swipe's own text and extras.
+        let extra = prepared?.extra ?? existingExtra;
+        const activity = getRoleplayCommandActivity(extra);
+        if (before !== content && activity.some((item) => item.contentOffset !== undefined)) {
+          const typedCount = prepared ? activity.length - getRoleplayCommandActivity(existingExtra).length : 0;
+          const kept = activity.length - Math.max(0, typedCount);
+          extra = {
+            ...extra,
+            roleplayCommandActivity: [
+              ...reanchorRoleplayCommandActivity(before, content, activity.slice(0, kept)),
+              ...activity.slice(kept),
+            ],
+          };
+        }
+        if (
+          typeof extra.conversationCommandContent === "string" &&
+          extra.conversationCommandContent.trim() !== "" &&
+          extra.commandOnly !== true &&
+          content !== before
+        ) {
+          extra = { ...extra, conversationCommandContent: null };
+        }
+
+        const swipePatch: Record<string, unknown> = { content };
+        if (extra !== existingExtra) swipePatch.extra = JSON.stringify(extra);
+        await db
+          .update(messageSwipes)
+          .set(swipePatch)
+          .where(and(eq(messageSwipes.messageId, id), eq(messageSwipes.id, swipe.id)));
+        return msg;
+      });
+    },
+
     /** Save a context flag, every swipe mirror and its automatic cutoff in one transaction. */
     async updateMessageExtraWithContextStart(
       id: string,
