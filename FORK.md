@@ -75,6 +75,8 @@ tools/fork/push-sync.sh
 
 It refuses unless `luma/staging`'s `fork-base.json` names the local `staging` and every local patch head (so it can't push a half-finished or stale rebuild). It then fetches `origin` and each mirror remote, refuses if a mirror holds a branch tip `origin` lacks, and pushes `staging`, every queued patch branch and `luma/staging` to `origin` and then to each mirror, all with `--force-with-lease --force-if-includes`. Mirrors are remotes named in `git config fork.mirror` (none by default; see the Docker host section).
 
+**Push `luma/staging` only from the local `luma/staging` branch.** Never push another ref onto it, such as `git push origin <sha>:luma/staging` or `HEAD:luma/staging` from a worktree or a detached checkout. `--force-if-includes` accepts a force-push only when the remote tip is in the local branch's reflog. A tip pushed from another ref is in no branch's reflog, so the next sync's push is refused. That happened on the 2026-11-01 sync: a tip pushed from another ref on 2026-10-28 blocked it. To recover, rebuild without `--skip-audit`. The audit lists every commit on `origin/luma/staging` missing from the patch queue. Confirm each one is in a patch branch or was dropped on purpose. Then push `luma/staging` with `--force-with-lease=luma/staging:<origin tip>` and without `--force-if-includes`.
+
 Useful flags: `--list` (show the queue), `--base <ref>` (default `upstream/staging`), `--into <branch>` (default `luma/staging`), `--no-fetch`, `--skip-audit`.
 
 As its last step the script commits a root `fork-base.json` onto the integration branch recording the base it built on and the exact patch heads it built from:
