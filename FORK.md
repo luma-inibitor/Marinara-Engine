@@ -198,11 +198,13 @@ The home server runs Marinara from a Docker image instead of a native install. T
 
 **No native toolchain.** The host has an older system Node and no pnpm. The sync script is plain Node with no dependencies and runs fine on the host's Node, but `pnpm` does not exist there. Validate with `tools/fork/in-node.sh pnpm install --frozen-lockfile && tools/fork/in-node.sh pnpm check` (see [Validating](#validating-after-any-sync-or-new-patch)), and drop `--check` from the sync script. The full suite runs the same way (`tools/fork/in-node.sh node ./scripts/run-regressions.mjs`, about 20 minutes). Under full-suite load a few timing-sensitive lanes (the multiplayer and shutdown ones) can fail, so rerun each failure alone with `--filter` before suspecting a patch. Two lanes fail in the container on stock `staging` too, as of 601fc97ff: `dottore-auto-dispatch` and `storage-writer-lock`.
 
-**Heavy work is capped, and a guard kills it before the host freezes.** The host has 15 GiB of RAM, 4 CPUs and the live server on it. On 2026-11-01, two agents' image builds, test containers and headless Chromium froze it hard twice, with no OOM kill logged. Three limits now apply to every session:
+**Heavy work is capped, and a guard watches memory.** The host has 15 GiB of RAM, 4 CPUs and the live server on it. On 2026-11-01, two agents' image builds, test containers and headless Chromium froze it hard twice, with no OOM kill logged. Three limits now apply to every session:
 
 - `tools/fork/in-node.sh` runs each container with 6 GiB of memory, no swap and CPUs 1-3, labeled `marinara.guard=heavy`. Override with `MARINARA_NODE_MEMORY` and `MARINARA_NODE_CPUS`. `pnpm check` peaks at about 4.5 GiB, because the server and client builds run in parallel; at 4 GiB the client build is killed.
 - Every `docker build` goes through the buildx builder `capped` (5 GiB, CPUs 1-3), set as the global default. Don't pass `--builder default`.
 - `~/.local/bin/marinara-guard` runs as the user service `marinara-guard`. When available memory or memory pressure crosses its threshold, it kills one heavy job at a time, youngest first: labeled containers, then the builder, then other containers with no restart policy, then Playwright's Chromium. It never kills a container with a restart policy, so the live server and the other services are safe. Its kills are logged in `~/.local/state/marinara-guard/kills.jsonl`.
+
+The guard does not prevent every freeze: a third one came with the guard running and memory looking fine 8 minutes earlier. The cause is not known. The host also runs a hardware watchdog and `below`; after a freeze, `below replay` shows what each container used before it.
 
 A test server you start yourself has no restart policy, so the guard can kill it. Give it `--memory` and `--cpuset-cpus 1-3`, and run one at a time.
 
