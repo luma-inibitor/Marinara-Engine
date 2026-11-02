@@ -34,9 +34,17 @@ mounts=(-v "$repo:$repo")
 common=$(cd "$repo" && realpath "$(git rev-parse --git-common-dir)")
 case "$common/" in "$repo"/*) ;; *) mounts+=(-v "$common:$common") ;; esac
 
+# Two agents' builds and tests beside the live server froze a 15 GiB host twice
+# (2026-11-01). Each container gets a hard memory cap with no swap, and CPU 0
+# stays free for the OS and the live server. Override with MARINARA_NODE_MEMORY
+# and MARINARA_NODE_CPUS. The label lets the host's build guard find it.
+memory="${MARINARA_NODE_MEMORY:-6g}"
+cpus="${MARINARA_NODE_CPUS:-1-3}"
 # label=disable: on SELinux hosts, read the bind mounts without relabeling them
 # (:Z would permanently relabel the checkout).
 exec docker run --rm -i $([ -t 0 ] && echo -t) \
+  --memory "$memory" --memory-swap "$memory" --cpuset-cpus "$cpus" \
+  --label marinara.guard=heavy \
   --user "$(id -u):$(id -g)" \
   --security-opt label=disable \
   -e HOME=/cache -e CI=true -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
