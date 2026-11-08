@@ -40,6 +40,9 @@ case "$common/" in "$repo"/*) ;; *) mounts+=(-v "$common:$common") ;; esac
 # and MARINARA_NODE_CPUS. The label lets the host's build guard find it.
 memory="${MARINARA_NODE_MEMORY:-6g}"
 cpus="${MARINARA_NODE_CPUS:-1-3}"
+# `pnpm check` runs all its lanes at once unless MARINARA_CHECK_JOBS caps them;
+# at once they outgrew the memory left beside the live server (2026-11-08).
+check_jobs="${MARINARA_CHECK_JOBS:-1}"
 # label=disable: on SELinux hosts, read the bind mounts without relabeling them
 # (:Z would permanently relabel the checkout).
 exec docker run --rm -i $([ -t 0 ] && echo -t) \
@@ -47,7 +50,7 @@ exec docker run --rm -i $([ -t 0 ] && echo -t) \
   --label marinara.guard=heavy \
   --user "$(id -u):$(id -g)" \
   --security-opt label=disable \
-  -e HOME=/cache -e CI=true -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e HOME=/cache -e CI=true -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -e MARINARA_CHECK_JOBS="$check_jobs" \
   -v "$cache:/cache" "${mounts[@]}" -w "$workdir" \
   "$image" \
   bash -c 'corepack enable --install-directory /cache/bin && PATH=/cache/bin:$PATH exec "$@"' in-node "$@"
