@@ -84,14 +84,6 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Staging rebase note (2026-10-25, 601fc97ff):** only the imports conflicted: upstream stopped importing `mergeModelContextLimit` and `resolveStoredModelContextLimit` from `model-access-policy.js`. Resolution: upstream's import plus the patch's `request-telemetry.js` import.
 - **Touches:** `packages/shared/src/types/generation-integration.ts`, `packages/server/src/services/llm/providers/openai.provider.ts`, `packages/server/src/services/telemetry/request-telemetry.ts`, `packages/server/src/routes/telemetry.routes.ts`, `packages/server/src/routes/index.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/services/agents/agent-executor.ts`, `packages/server/src/services/advanced-memory.ts`, `scripts/regressions/request-telemetry.regression.ts`.
 
-### `patch/impersonate-regen-group`
-
-- **What:** Regenerating an impersonated message in a group chat set to individual mode failed with "Regenerated message is missing character". The individual regen path in `generate.routes.ts` requires the regenerated message to belong to a character, and an impersonation is the user's own message with no `characterId`. A fresh impersonation already skips the individual loop (`useIndividualLoop` checks `!input.impersonate`); `regenGroupChatIndividual` now does too, so a regenerated impersonation takes the same merged path as a fresh one.
-- **Why forked:** Hit on the device after adding a narrator character to a one-on-one roleplay, which made it a group chat in individual mode.
-- **Upstream status:** Not submitted. Upstream staging still has the unguarded condition as of 77ee9026e (2026-10-21). Worth offering.
-- **Validation:** `pnpm check`.
-- **Touches:** `packages/server/src/routes/generate.routes.ts`.
-
 ### `patch/impersonate-lore-trigger`
 
 - **What:** A reroll (regenerate or swipe) of a user-role message now carries the `impersonate` lorebook generation trigger, alongside `swipe` and `regenerate`. `resolveLorebookGenerationTriggers` takes the role of the message being regenerated, and `generate.routes.ts` passes it from the regen target it already loads. Before, `impersonate` was added only when `input.impersonate` was set, which a reroll gets only from an impersonation's stored generation replay; rerolling a typed message, or an impersonation without a replay, wrote as the persona with only `swipe`/`regenerate`. A reroll of a stored impersonation also keeps `swipe`/`regenerate` now, where it used to carry `impersonate` alone. The prompt dry run (`dry-run-route.ts`) has its own copy of the rule and gets the same change, so the preview matches the real scan. Continue is unaffected: it accepts only assistant messages.
@@ -143,6 +135,10 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Touches:** `packages/server/src/routes/chats.routes.ts`, `packages/server/src/services/storage/chats.storage.ts`, `scripts/regressions/swipe-edit-target.regression.ts`.
 
 ## Retired patches
+
+### `patch/impersonate-regen-group` — retired on the 2026-11-08 sync
+
+Upstream fixed the same bug more broadly. `a13fa31fc fix(chat): impersonated turns keep their reasoning and regenerate in Individual groups (#8682)` changed `regenGroupChatIndividual` to check `regenMsg?.role !== "user"`, so every persona turn, typed or impersonated, takes the merged path. Our guard (`!input.impersonate`) conflicted with that line and was dropped, so the branch rebased to empty.
 
 ### `patch/mari-unsandboxed-shell` — retired 2026-10-28
 
