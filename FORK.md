@@ -200,7 +200,7 @@ The home server runs Marinara from a Docker image instead of a native install. T
 
 **Heavy work is capped, and a guard watches memory.** The host has 15 GiB of RAM, 4 CPUs and the live server on it. On 2026-11-01, two agents' image builds, test containers and headless Chromium froze it hard twice, with no OOM kill logged. Three limits now apply to every session:
 
-- `tools/fork/in-node.sh` runs each container with 6 GiB of memory, no swap and CPUs 1-3, labeled `marinara.guard=heavy`. Override with `MARINARA_NODE_MEMORY` and `MARINARA_NODE_CPUS`. `pnpm check` peaks at about 4.5 GiB, because the server and client builds run in parallel; at 4 GiB the client build is killed.
+- `tools/fork/in-node.sh` runs each container with 6 GiB of memory, no swap and CPUs 1-3, labeled `marinara.guard=heavy`. Override with `MARINARA_NODE_MEMORY` and `MARINARA_NODE_CPUS`. It also sets `MARINARA_CHECK_JOBS=1`, so `pnpm check` runs its lanes one at a time: it peaked at 3.1 GiB on 2026-11-08. With every lane at once it outgrew the 6 GiB cap and the memory left beside the live server, and the guard killed it.
 - Every `docker build` goes through the buildx builder `capped` (5 GiB, CPUs 1-3), set as the global default. Don't pass `--builder default`.
 - `~/.local/bin/marinara-guard` runs as the user service `marinara-guard`. When available memory or memory pressure crosses its threshold, it kills one heavy job at a time, youngest first: labeled containers, then the builder, then other containers with no restart policy, then Playwright's Chromium. It never kills a container with a restart policy, so the live server and the other services are safe. Its kills are logged in `~/.local/state/marinara-guard/kills.jsonl`.
 
