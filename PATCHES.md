@@ -134,6 +134,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Validation:** `pnpm check`; the new `swipe-edit-target` lane; `message-edit-delete-races`.
 - **Touches:** `packages/server/src/routes/chats.routes.ts`, `packages/server/src/services/storage/chats.storage.ts`, `scripts/regressions/swipe-edit-target.regression.ts`.
 
+### `patch/generation-record-pruning`
+
+- **What:** After each saved generation, the generate route clears `cachedPrompt` and `advancedMemorySnapshot` from every message past the newest two of its role, on the message and on each of its swipes. Upstream's loop kept `cachedPrompt` on the newest two assistant messages, never looked at user-role messages, and never cleared `advancedMemorySnapshot`. The sweep (`routes/generate/prune-generation-records.ts`) checks each serialized extra for a record before parsing it.
+- **Why forked:** Impersonated turns are saved as user-role messages with the full prompt they sent. On "Dr. Veill - Roleplay" (1,847 messages), 816 impersonated turns and 958 of their swipes still held their prompts: 716 MB on disk around 7 MB of text, 300 MB of it prompts, 135 MB memory snapshots and 180 MB lorebook entry text. Every write of that shard rewrote it whole, which pushed the server past its 4.2 GiB heap and crashed it four times on 2026-11-09. Lorebook scan text is handled by upstream's opt-in `LOREBOOK_COMPACT_STORED_SCANS`, which beebox now sets.
+- **Upstream status:** Not yet submitted (candidate). Upstream bug, self-contained.
+- **Validation:** `pnpm check`; the new `generation-record-pruning` lane (per-role window, message and swipe clearing, other extras untouched, a second pass writes nothing, the route calls it); `generate-saved-message-extra`, `prompt` and `advanced-memory` lanes.
+- **Touches:** `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/prune-generation-records.ts`, `scripts/regressions/generation-record-pruning.regression.ts`.
+
 ## Retired patches
 
 ### `patch/impersonate-regen-group` — retired on the 2026-11-08 sync
