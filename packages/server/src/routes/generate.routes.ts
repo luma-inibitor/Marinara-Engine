@@ -119,6 +119,7 @@ import { cleanGeneratedReply } from "./generate/reply-text-cleanup.js";
 import { saveHiddenCommandAnchor } from "./generate/hidden-command-anchor.js";
 import { saveGeneratedReply } from "./generate/save-generated-reply.js";
 import { buildGenerationInfoExtra } from "./generate/saved-message-extra.js";
+import { pruneStaleGenerationRecords } from "./generate/prune-generation-records.js";
 import { runToolRounds } from "./generate/tool-rounds.js";
 // ──────────────────────────────────────────────
 // Routes: Generation (SSE Streaming with Tool Use + Agent Pipeline)
@@ -12107,27 +12108,8 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
               }
             }
 
-            // Evict cachedPrompt from older messages to save storage (keep last 2 assistant msgs).
-            // Reuse the already-fetched message objects (they carry `extra`) rather than a
-            // per-id chats.getMessage — the latter is a full table scan each in the file-native
-            // store, which made this loop O(n^2) in total chat size (#3402). Only messages that
-            // still hold a cachedPrompt need the (bounded) update + swipe cleanup.
-            const allMsgs = await chats.listMessages(input.chatId);
-            const staleAssistants = allMsgs.filter((m) => m.role === "assistant").slice(0, -2);
-            for (const staleMsg of staleAssistants) {
-              const staleExtra =
-                typeof staleMsg.extra === "string" ? JSON.parse(staleMsg.extra) : (staleMsg.extra ?? {});
-              if (!staleExtra.cachedPrompt) continue;
-              await chats.updateMessageExtra(staleMsg.id, { cachedPrompt: null });
-              // Also clean swipes
-              const swipes = await chats.getSwipes(staleMsg.id);
-              for (const sw of swipes) {
-                const swExtra = typeof sw.extra === "string" ? JSON.parse(sw.extra) : (sw.extra ?? {});
-                if (swExtra.cachedPrompt) {
-                  await chats.updateSwipeExtra(staleMsg.id, sw.index, { cachedPrompt: null });
-                }
-              }
-            }
+            // Older messages drop the prompt and memory snapshot they were generated with, impersonations included.
+            await pruneStaleGenerationRecords(chats, input.chatId);
           }
 
           // Mirror character response to Discord (fire-and-forget, skip regens/swipes)
