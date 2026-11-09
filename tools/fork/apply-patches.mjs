@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Rebuild the fork's integration branch from upstream + the patch queue.
 //
-//   1. refresh refs: fetch upstream AND origin, then refresh the pristine mirror
+//   1. refresh refs: fetch upstream, origin and any fork.mirror remotes, then
+//      refresh the pristine mirror
 //   2. freshness guard: fast-forward stale local patch branches to origin,
 //      refuse to build from a diverged one
 //   3. rebase every patch branch in patches.list onto the base
@@ -13,7 +14,7 @@
 //
 // Usage:
 //   tools/fork/apply-patches.sh [options]        (thin launcher for this file)
-//     --no-fetch        skip fetching upstream/origin (offline / already fetched)
+//     --no-fetch        skip fetching upstream/origin/mirrors (offline / already fetched)
 //     --base <ref>      upstream base to build on   (default: upstream/staging)
 //     --into <branch>   integration branch to build (default: luma/staging)
 //     --check           run `pnpm check` on the result
@@ -123,7 +124,7 @@ const opts = {
     else if (arg === "--into") opts.into = argv[++i] ?? die("--into needs a branch");
     else if (arg === "-h" || arg === "--help") {
       const self = readFileSync(new URL(import.meta.url), "utf8");
-      for (const line of self.split("\n").slice(1, 26)) console.log(line.replace(/^\/\/ ?/, ""));
+      for (const line of self.split("\n").slice(1, 25)) console.log(line.replace(/^\/\/ ?/, ""));
       process.exit(0);
     } else die(`Unknown option: ${arg}`);
   }
@@ -167,13 +168,21 @@ console.log(`  patches: ${patches.join(" ")}`);
 // ---------------------------------------------------------------------------
 
 if (opts.fetch) {
-  step("Fetching upstream and origin");
+  step("Fetching upstream, origin and mirrors");
   if (!gitOk("remote", "get-url", "upstream"))
     die("No 'upstream' remote. Add it: git remote add upstream https://github.com/Pasta-Devs/Marinara-Engine");
   if (!gitOk("fetch", "upstream")) die("Fetch from upstream failed.");
   if (!gitOk("remote", "get-url", "origin")) die("No 'origin' remote.");
   if (!gitOk("fetch", "origin", "--prune")) die("Fetch from origin failed.");
-  ok("fetched upstream + origin");
+  // Fetch the mirrors now too. push-sync.sh pushes to them with --force-if-includes,
+  // which only counts local reflog entries newer than the mirror's tracking ref. A
+  // mirror first fetched inside push-sync.sh is newer than every rebase, so its push
+  // is refused even when it holds exactly what origin does (2026-11-09).
+  const mirrors = git("config", "--get-all", "fork.mirror").out.split("\n").filter(Boolean);
+  for (const remote of mirrors) {
+    if (!gitOk("fetch", remote, "--prune")) die(`Fetch from mirror '${remote}' failed.`);
+  }
+  ok(`fetched upstream + origin${mirrors.map((m) => ` + ${m}`).join("")}`);
 } else {
   warn("Skipping fetch (--no-fetch) — the freshness guard is only as good as your last fetch");
 }
