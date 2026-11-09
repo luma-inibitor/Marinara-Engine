@@ -60,7 +60,7 @@ Conflicts that are only in `CHANGELOG.md` are resolved automatically (keeping up
 
 Three guards protect against rebuilding from stale state — the failure mode that has twice dropped pushed commits:
 
-- **It fetches `origin` as well as `upstream`**, then compares every local patch branch to its `origin/*` counterpart: a branch that is strictly behind is fast-forwarded automatically; a branch that has truly diverged (origin holds commits this clone never integrated, judged by the branch reflog — the same rule as `git push --force-if-includes`) stops the run with reconciliation steps.
+- **It fetches `origin` (and each `fork.mirror` remote) as well as `upstream`**, then compares every local patch branch to its `origin/*` counterpart: a branch that is strictly behind is fast-forwarded automatically; a branch that has truly diverged (origin holds commits this clone never integrated, judged by the branch reflog — the same rule as `git push --force-if-includes`) stops the run with reconciliation steps.
 - **It audits the old integration branch before overwriting it**: any commit on `origin/luma/staging` since the previous stamp with no equivalent (by patch-id, then by subject) in the patch queue is listed and stops the run — that is a hotfix that landed on the integration branch but never made it back to its patch branch, and rebuilding would silently drop it. Commits whose diff is only `CHANGELOG.md`, and commits upstream has since adopted, are exempt — those disappear legitimately. `--skip-audit` overrides when dropping is intentional.
 - **`push-sync.sh` pushes with `--force-with-lease --force-if-includes`**, so even a push issued later from this clone refuses to overwrite work that was fetched but never integrated.
 
@@ -217,7 +217,7 @@ git remote add gh https://github.com/luma-inibitor/Marinara-Engine
 git config --add fork.mirror gh
 ```
 
-Before a sync, `git fetch gh` and check that `git log --oneline origin/luma/staging...gh/luma/staging` is empty; reconcile anything GitHub alone has before rebuilding. `push-sync.sh` refuses to push over such commits either way.
+The sync script fetches every mirror along with `origin`, before it rebases. That keeps `--force-if-includes` working: it counts only local reflog entries newer than the mirror's tracking ref, so a mirror first fetched inside `push-sync.sh` refused its push on 2026-11-09 although it held exactly what `origin` did. Before a sync, check that `git log --oneline origin/luma/staging...gh/luma/staging` is empty; reconcile anything GitHub alone has before rebuilding. `push-sync.sh` refuses to push over such commits either way.
 
 **Deploying is an image build.** `~/.local/bin/marinara` (outside the repo) is the host's switcher, the Docker counterpart of `tools/termux/`:
 
