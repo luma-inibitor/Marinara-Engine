@@ -19,6 +19,7 @@ patch/android-remote-server
 patch/advanced-memory-yield-and-cache
 patch/swipe-edit-target
 patch/generation-record-pruning
+patch/illustrator-visible-references
 # After patch/ambient-sky: same files. Applies cleanly; kept last so a hunk
 # that stops carrying forward is a loud conflict, not a silent regression.
 patch/fork-tooling
