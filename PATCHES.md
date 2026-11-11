@@ -142,6 +142,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Validation:** `pnpm check`; the new `generation-record-pruning` lane (per-role window, message and swipe clearing, other extras untouched, a second pass writes nothing, the route calls it); `generate-saved-message-extra`, `prompt` and `advanced-memory` lanes.
 - **Touches:** `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/prune-generation-records.ts`, `scripts/regressions/generation-record-pruning.regression.ts`.
 
+### `patch/illustrator-visible-references`
+
+- **What:** When the Illustrator returns its `characters` list, reference selection matches names against that list and the image prompt only. Without a list it still scans the user turn, style, reason and reply as before. The rule is `illustratorReferenceMatchText()` in `illustrator-references.ts`, used by the live illustrator route and the retry route.
+- **Why forked:** Selection matched names anywhere in the reply, so characters mentioned off-screen were attached as likeness references. On the Veill roleplay a two-person dinner scene carried four faces plus the location, and Krea 2 stitches every reference into one strip with no way to tell whose face is whose, so it blended them. Replaying six recent scenes (same seed, appearance blocks off): likeness 8.2 → 8.9, hybrids 1/6 → 0/6, with the location reference kept.
+- **Upstream status:** Not yet submitted (candidate). Upstream bug, self-contained.
+- **Validation:** `pnpm check`; the new `illustrator-listed-cast-references` lane (fails without the route change); the other illustrator lanes.
+- **Touches:** `packages/server/src/services/image/illustrator-references.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/retry-agents-route.ts`, `scripts/regressions/illustrator-listed-cast-references.regression.ts`.
+
 ## Retired patches
 
 ### `patch/impersonate-regen-group` — retired on the 2026-11-08 sync
