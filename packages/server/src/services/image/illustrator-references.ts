@@ -301,6 +301,15 @@ function buildNameAliases(name: string, opts: { includeStandaloneTokens?: boolea
   return [...aliases].sort((a, b) => b.length - a.length);
 }
 
+/**
+ * The text reference selection matches names against. A listed cast decides the
+ * references on its own, so characters named only in the surrounding turn stay out.
+ */
+export function illustratorReferenceMatchText(listedCast: unknown[], imagePrompt: string, turnText: string[]): string {
+  const hasCast = listedCast.some((name) => typeof name === "string" && name.trim().length > 0);
+  return hasCast ? imagePrompt : [...turnText.slice(0, 1), imagePrompt, ...turnText.slice(1)].join("\n");
+}
+
 export function normalizeIllustratorAppearance(value: unknown): string | null {
   const cleaned = typeof value === "string" ? stripMacroComments(value).replace(/\s+/g, " ").trim() : "";
   return cleaned || null;
