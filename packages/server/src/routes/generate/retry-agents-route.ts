@@ -274,6 +274,7 @@ import {
   suppressesReferencePromptLine,
   mergeIllustratorNegativePrompt,
   illustratorPromptTemplateOwnsComposition,
+  illustratorReferenceMatchText,
   resolveIllustratorCharacterReferences,
 } from "./illustrator-references.js";
 import {
@@ -4083,13 +4084,12 @@ async function applyRetryResultEffects(args: {
               // The same cast its clips use: the chat's characters, a character used as the user, and the persona.
               ...clipCast,
               requestedNames: illCharacters.filter((name): name is string => typeof name === "string"),
-              promptText: [
+              promptText: illustratorReferenceMatchText(illCharacters, imagePrompt, [
                 [...agentContext.recentMessages].reverse().find((message) => message.role === "user")?.content ?? "",
-                imagePrompt,
                 style,
                 typeof illData.reason === "string" ? illData.reason : "",
                 agentContext.mainResponse ?? "",
-              ].join("\n"),
+              ]),
               fallbackToChatCharacters: false,
               includeReferenceImages: useAvatarRefs,
               includePersonaWhenMentionedInPrompt: false,

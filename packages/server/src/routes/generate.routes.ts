@@ -559,6 +559,7 @@ import {
   suppressesReferencePromptLine,
   mergeIllustratorNegativePrompt,
   illustratorPromptTemplateOwnsComposition,
+  illustratorReferenceMatchText,
   resolveIllustratorCharacterReferences,
 } from "./generate/illustrator-references.js";
 import {
@@ -15089,13 +15090,12 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                         personaGallery,
                         ...illustratorCast(),
                         requestedNames: illCharacters.filter((name): name is string => typeof name === "string"),
-                        promptText: [
+                        promptText: illustratorReferenceMatchText(illCharacters, imagePrompt, [
                           currentUserInputContent() ?? "",
-                          imagePrompt,
                           style,
                           typeof illData.reason === "string" ? illData.reason : "",
                           completedResponse,
-                        ].join("\n"),
+                        ]),
                         fallbackToChatCharacters: false,
                         includeReferenceImages: useAvatarRefs,
                         includePersonaWhenMentionedInPrompt: false,
