@@ -371,6 +371,12 @@ function adoptedByBase(sha, base) {
   return out.split("\n").some((line) => line.startsWith("- "));
 }
 
+// The origin tip the audit cleared, if it did. Stamped as `replaces` so
+// push-sync.mjs can overwrite exactly that tip even when this clone's reflog
+// never held it (it was pushed from another clone), which --force-if-includes
+// would otherwise refuse.
+let auditedTip = "";
+
 step(`Auditing origin/${opts.into} for commits the rebuild would drop`);
 {
   const oldIntegration = gitOk("rev-parse", "--verify", "--quiet", `refs/remotes/origin/${opts.into}`)
@@ -422,9 +428,11 @@ step(`Auditing origin/${opts.into} for commits the rebuild would drop`);
       }
       if (dropped.length === 0) {
         ok(`every commit on origin/${opts.into} is carried by the patch queue`);
+        auditedTip = oldIntegration;
       } else if (opts.skipAudit) {
         warn(`--skip-audit: rebuilding anyway; these commits will be DROPPED from ${opts.into}:`);
         for (const line of dropped) console.log(`      ${line}`);
+        auditedTip = oldIntegration; // dropping them was asked for
       } else {
         console.error(`\n${red(`These commits exist on origin/${opts.into} but in no patch branch:`)}`);
         for (const line of dropped) console.error(`    ${line}`);
@@ -504,6 +512,7 @@ step(`Stamping the upstream base onto ${opts.into}`);
   const patchHeads = {};
   for (const patch of patches) patchHeads[patch] = gitOut("rev-parse", patch);
   const stamp = { baseRef: opts.base, baseCommit: newBase, baseBranch, patches: patchHeads };
+  if (auditedTip) stamp.replaces = auditedTip;
   writeFileSync("fork-base.json", `${JSON.stringify(stamp, null, 2)}\n`);
   if (!gitOk("add", "fork-base.json")) die("Could not stage fork-base.json");
   if (!gitOk("commit", "-q", "-m", `chore(fork): stamp upstream base ${newBase.slice(0, 12)}`))
