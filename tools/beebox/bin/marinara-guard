@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""marinara-guard: kill heavy work on beebox before memory pressure freezes the host.
+
+Each tick reads MemAvailable (/proc/meminfo) and PSI `full avg10`
+(/proc/pressure/memory). When either crosses its threshold, it kills one
+target per tick, then re-checks. Target classes, in order of preference,
+youngest first within a class:
+
+  heavy    running containers labeled marinara.guard=heavy
+  builder  buildx builder containers (buildx_buildkit_*)
+  norestart  other containers with restart policy "no", not marinara.guard=keep
+  browser  host processes of this user running Playwright Chromium, by group
+
+Containers with any other restart policy are never killed (the builder is the
+one named exception). Stdlib only.
+"""
+
+import argparse
+import dataclasses
+import datetime
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+GIB = 1024**3
+DEFAULT_MIN_AVAILABLE_GIB = 2.0
+DEFAULT_PANIC_AVAILABLE_GIB = 1.0
+DEFAULT_MAX_PSI_FULL = 10.0
+DEFAULT_INTERVAL_S = 1.0
+DEFAULT_MIN_AVAILABLE = int(DEFAULT_MIN_AVAILABLE_GIB * GIB)
+DEFAULT_PANIC_AVAILABLE = int(DEFAULT_PANIC_AVAILABLE_GIB * GIB)
+DEFAULT_BACKOFF_S = 10.0
+HEARTBEAT_S = 600.0
+NO_TARGET_LOG_S = 60.0
+DOCKER_TIMEOUT_S = 8.0
+
+MEMINFO = "/proc/meminfo"
+PRESSURE = "/proc/pressure/memory"
+PROC = "/proc"
+STATE_DIR_REL = ".local/state/marinara-guard"
+KILLS_FILE = "kills.jsonl"
+
+LABEL = "marinara.guard"
+BUILDER_PREFIX = "buildx_buildkit_"
+BROWSER_MARKERS = ("/opt/pw-browsers", "ms-playwright")
+PROTECTED_COMMS = frozenset(
+    {"dockerd", "containerd", "systemd", "sshd", "sshd-session", "tailscaled", "claude",
+     "marinara-guard", "docker", "containerd-shim", "containerd-shim-runc-v2"}
+)
+CLASS_ORDER = ("heavy", "builder", "norestart", "browser")
+ENV_PREFIX = "MARINARA_GUARD_"
+
+
+@dataclasses.dataclass(frozen=True)
+class Reading:
+    available: int | None  # bytes
+    psi_full10: float | None
+
+
+@dataclasses.dataclass(frozen=True)
+class Target:
+    kind: str  # one of CLASS_ORDER
+    ident: str  # container id or process group id
+    name: str
+    started: float  # epoch seconds
+    pids: tuple = ()
+
+
+def log(msg):
+    print(f"marinara-guard: {msg}", file=sys.stderr, flush=True)
+
+
+def read_reading(meminfo_path, pressure_path):
+    available = None
+    try:
+        with open(meminfo_path) as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    available = int(line.split()[1]) * 1024
+                    break
+    except OSError as e:
+        log(f"cannot read {meminfo_path}: {e}")
+    psi = None
+    try:
+        with open(pressure_path) as f:
+            for line in f:
+                if line.startswith("full "):
+                    m = re.search(r"avg10=([0-9.]+)", line)
+                    if m:
+                        psi = float(m.group(1))
+    except OSError:
+        pass  # PSI not available on this kernel
+    return Reading(available, psi)
+
+
+def trip_reasons(reading, min_available, max_psi):
+    reasons = []
+    if reading.available is not None and reading.available < min_available:
+        reasons.append(f"MemAvailable {reading.available / GIB:.2f} GiB < {min_available / GIB:.2f} GiB")
+    if reading.psi_full10 is not None and reading.psi_full10 > max_psi:
+        reasons.append(f"PSI full avg10 {reading.psi_full10:.2f} > {max_psi:.2f}")
+    return reasons
+
+
+def parse_docker_time(s):
+    # e.g. 2026-11-02T01:14:23.635175132Z
+    if not s or s.startswith("0001-"):
+        return 0.0
+    m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)$", s)
+    if not m:
+        return 0.0
+    tz = "+00:00" if m.group(3) == "Z" else m.group(3)
+    dt = datetime.datetime.fromisoformat(m.group(1) + tz)
+    frac = float(m.group(2)) if m.group(2) else 0.0
+    return dt.timestamp() + frac
+
+
+class Docker:
+    def __init__(self, cmd="docker", timeout=DOCKER_TIMEOUT_S):
+        self.cmd = cmd
+        self.timeout = timeout
+
+    def _run(self, args):
+        return subprocess.run(
+            [self.cmd, *args], capture_output=True, text=True, timeout=self.timeout, check=False
+        )
+
+    def running(self):
+        """Return a list of inspect dicts for running containers."""
+        r = self._run(["ps", "-q", "--no-trunc", "--filter", "status=running"])
+        if r.returncode != 0:
+            raise RuntimeError(f"docker ps failed: {r.stderr.strip()}")
+        ids = r.stdout.split()
+        if not ids:
+            return []
+        r = self._run(["inspect", *ids])
+        if r.returncode != 0 and not r.stdout.strip():
+            raise RuntimeError(f"docker inspect failed: {r.stderr.strip()}")
+        return json.loads(r.stdout or "[]")
+
+    def kill(self, ident):
+        r = self._run(["kill", ident])
+        return r.returncode == 0, (r.stderr or r.stdout).strip()
+
+
+def classify_container(info):
+    """Return the target class for a container inspect dict, or None to spare it."""
+    name = (info.get("Name") or "").lstrip("/")
+    labels = (info.get("Config") or {}).get("Labels") or {}
+    policy = ((info.get("HostConfig") or {}).get("RestartPolicy") or {}).get("Name") or "no"
+    if not (info.get("State") or {}).get("Running"):
+        return None
+    if labels.get(LABEL) == "keep":
+        return None
+    if name.startswith(BUILDER_PREFIX):
+        return "builder"
+    if policy != "no":
+        return None
+    if labels.get(LABEL) == "heavy":
+        return "heavy"
+    return "norestart"
+
+
+def container_targets(infos):
+    out = []
+    for info in infos:
+        kind = classify_container(info)
+        if kind is None:
+            continue
+        out.append(Target(
+            kind=kind,
+            ident=info.get("Id", ""),
+            name=(info.get("Name") or "").lstrip("/"),
+            started=parse_docker_time((info.get("State") or {}).get("StartedAt")),
+        ))
+    return out
+
+
+def _boot_time(proc):
+    try:
+        with open(os.path.join(proc, "stat")) as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+    except OSError:
+        pass
+    return 0.0
+
+
+def _read_stat(proc, pid):
+    """Return (comm, pgid, starttime_ticks) or None."""
+    try:
+        with open(os.path.join(proc, pid, "stat")) as f:
+            data = f.read()
+    except OSError:
+        return None
+    lp, rp = data.find("("), data.rfind(")")
+    if lp < 0 or rp < 0:
+        return None
+    comm = data[lp + 1:rp]
+    fields = data[rp + 2:].split()
+    # fields[0] is state (field 3); pgrp is field 5, starttime field 22
+    try:
+        return comm, int(fields[2]), int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def _in_container(proc, pid):
+    try:
+        with open(os.path.join(proc, pid, "cgroup")) as f:
+            cg = f.read()
+    except OSError:
+        return True  # unknown: be safe, skip it
+    return "docker" in cg or "containerd" in cg or "libpod" in cg
+
+
+def browser_targets(proc=PROC, uid=None, self_pgid=None):
+    """Group Playwright Chromium processes of `uid` by process group."""
+    uid = os.getuid() if uid is None else uid
+    self_pgid = os.getpgrp() if self_pgid is None else self_pgid
+    tck = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+    btime = _boot_time(proc)
+    groups = {}  # pgid -> dict
+    protected_pgids = set()
+    try:
+        entries = os.listdir(proc)
+    except OSError:
+        return []
+    for pid in entries:
+        if not pid.isdigit():
+            continue
+        try:
+            if os.stat(os.path.join(proc, pid)).st_uid != uid:
+                continue
+            with open(os.path.join(proc, pid, "cmdline"), "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        st = _read_stat(proc, pid)
+        if st is None:
+            continue
+        comm, pgid, start = st
+        if comm in PROTECTED_COMMS or os.path.basename(cmd.split(" ", 1)[0]) in PROTECTED_COMMS:
+            protected_pgids.add(pgid)
+            continue
+        if not any(m in cmd for m in BROWSER_MARKERS):
+            continue
+        if _in_container(proc, pid):
+            continue
+        g = groups.setdefault(pgid, {"pids": [], "start": float("inf"), "comm": comm})
+        g["pids"].append(int(pid))
+        g["start"] = min(g["start"], btime + start / tck)
+    out = []
+    for pgid, g in groups.items():
+        # whole group only when it is safe to signal; otherwise just the matched pids
+        whole = pgid != self_pgid and pgid not in protected_pgids and pgid > 1
+        out.append(Target(
+            kind="browser",
+            ident=f"pgid:{pgid}" if whole else f"pids:{','.join(map(str, sorted(g['pids'])))}",
+            name=f"{g['comm']} x{len(g['pids'])}",
+            started=g["start"],
+            pids=tuple(sorted(g["pids"])),
+        ))
+    return out
+
+
+def pick_target(targets, name_filter=None):
+    """Class order first, youngest first within a class."""
+    if name_filter:
+        rx = re.compile(name_filter)
+        targets = [t for t in targets if rx.search(t.name)]
+    if not targets:
+        return None
+    rank = {k: i for i, k in enumerate(CLASS_ORDER)}
+    return sorted(targets, key=lambda t: (rank[t.kind], -t.started))[0]
+
+
+def kill_process_target(t, sender=os.kill, group_sender=os.killpg):
+    try:
+        if t.ident.startswith("pgid:"):
+            group_sender(int(t.ident[5:]), signal.SIGKILL)
+        else:
+            for pid in t.pids:
+                try:
+                    sender(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        return True, ""
+    except OSError as e:
+        return False, str(e)
+
+
+class Guard:
+    def __init__(self, *, meminfo=MEMINFO, pressure=PRESSURE, proc=PROC, docker=None,
+                 min_available=DEFAULT_MIN_AVAILABLE,
+                 panic_available=DEFAULT_PANIC_AVAILABLE,
+                 max_psi=DEFAULT_MAX_PSI_FULL, backoff=DEFAULT_BACKOFF_S,
+                 dry_run=False, state_dir=None, name_filter=None, clock=time.monotonic,
+                 process_killer=kill_process_target):
+        self.meminfo, self.pressure, self.proc = meminfo, pressure, proc
+        self.docker = docker if docker is not None else Docker()
+        self.min_available, self.panic_available = min_available, panic_available
+        self.max_psi, self.backoff = max_psi, backoff
+        self.dry_run, self.name_filter = dry_run, name_filter
+        self.state_dir = Path(state_dir) if state_dir else Path.home() / STATE_DIR_REL
+        self.clock = clock
+        self.process_killer = process_killer
+        self.last_kill = None
+        self.last_heartbeat = None
+        self.last_no_target_log = None
+        self.tripped = False
+        self.kills = 0
+
+    def record(self, rec):
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.state_dir / KILLS_FILE, "a") as f:
+                f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        except OSError as e:
+            log(f"cannot write kill record: {e}")
+
+    def gather(self):
+        targets = []
+        try:
+            targets += container_targets(self.docker.running())
+        except (RuntimeError, subprocess.TimeoutExpired, ValueError, OSError) as e:
+            log(f"docker query failed: {e}")
+        targets += browser_targets(self.proc)
+        return targets
+
+    def tick(self):
+        """One check. Returns the Target acted on, or None."""
+        now = self.clock()
+        r = read_reading(self.meminfo, self.pressure)
+        avail_s = "?" if r.available is None else f"{r.available / GIB:.2f}GiB"
+        psi_s = "?" if r.psi_full10 is None else f"{r.psi_full10:.2f}"
+        if self.last_heartbeat is None or now - self.last_heartbeat >= HEARTBEAT_S:
+            log(f"heartbeat avail={avail_s} psi_full10={psi_s} kills={self.kills}"
+                f"{' dry-run' if self.dry_run else ''}")
+            self.last_heartbeat = now
+        reasons = trip_reasons(r, self.min_available, self.max_psi)
+        if not reasons:
+            if self.tripped:
+                log(f"recovered avail={avail_s} psi_full10={psi_s}")
+            self.tripped = False
+            return None
+        if not self.tripped:
+            log(f"TRIP: {'; '.join(reasons)}")
+        self.tripped = True
+        panic = r.available is not None and r.available < self.panic_available
+        if self.last_kill is not None and now - self.last_kill < self.backoff and not panic:
+            return None
+        target = pick_target(self.gather(), self.name_filter)
+        if target is None:
+            if self.last_no_target_log is None or now - self.last_no_target_log >= NO_TARGET_LOG_S:
+                log(f"tripped but no killable target ({'; '.join(reasons)})")
+                self.last_no_target_log = now
+            return None
+        if self.dry_run:
+            ok, err = True, "dry-run"
+        elif target.kind == "browser":
+            ok, err = self.process_killer(target)
+        else:
+            try:
+                ok, err = self.docker.kill(target.ident)
+            except (subprocess.TimeoutExpired, OSError) as e:
+                ok, err = False, str(e)
+        self.last_kill = now
+        if ok and not self.dry_run:
+            self.kills += 1
+        verb = "WOULD KILL" if self.dry_run else ("KILLED" if ok else "KILL FAILED")
+        log(f"{verb} {target.kind} {target.name} ({target.ident[:20]}) "
+            f"avail={avail_s} psi_full10={psi_s} reason={'; '.join(reasons)}"
+            f"{'' if ok else ' error=' + err}")
+        self.record({
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "action": "dry-run" if self.dry_run else ("kill" if ok else "kill-failed"),
+            "kind": target.kind, "name": target.name, "id": target.ident,
+            "started": target.started, "mem_available": r.available,
+            "psi_full_avg10": r.psi_full10, "reasons": reasons, "panic": panic,
+            "error": None if ok else err,
+        })
+        return target
+
+    def run(self, interval=DEFAULT_INTERVAL_S, once=False):
+        log(f"start min_available={self.min_available / GIB:.2f}GiB "
+            f"panic={self.panic_available / GIB:.2f}GiB max_psi_full10={self.max_psi} "
+            f"backoff={self.backoff}s interval={interval}s dry_run={self.dry_run}")
+        while True:
+            try:
+                self.tick()
+            except Exception as e:  # never die on a bad tick; systemd would restart anyway
+                log(f"tick error: {e!r}")
+            if once:
+                return
+            time.sleep(interval)
+
+
+def _env(name, default):
+    return os.environ.get(ENV_PREFIX + name, default)
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--min-available", type=float,
+                   default=float(_env("MIN_AVAILABLE_GIB", DEFAULT_MIN_AVAILABLE_GIB)),
+                   help="trip when MemAvailable below this many GiB")
+    p.add_argument("--panic-available", type=float,
+                   default=float(_env("PANIC_AVAILABLE_GIB", DEFAULT_PANIC_AVAILABLE_GIB)),
+                   help="skip the backoff below this many GiB")
+    p.add_argument("--max-psi", type=float,
+                   default=float(_env("MAX_PSI_FULL", DEFAULT_MAX_PSI_FULL)),
+                   help="trip when PSI memory full avg10 above this")
+    p.add_argument("--backoff", type=float, default=float(_env("BACKOFF_S", DEFAULT_BACKOFF_S)))
+    p.add_argument("--interval", type=float, default=float(_env("INTERVAL_S", DEFAULT_INTERVAL_S)))
+    p.add_argument("--dry-run", action="store_true", default=_env("DRY_RUN", "") == "1")
+    p.add_argument("--once", action="store_true", help="run one tick and exit")
+    p.add_argument("--meminfo", default=MEMINFO)
+    p.add_argument("--pressure", default=PRESSURE)
+    p.add_argument("--proc", default=PROC)
+    p.add_argument("--docker", default=_env("DOCKER", "docker"), help="docker CLI to call")
+    p.add_argument("--state-dir", default=None)
+    p.add_argument("--only-names", default=None, help="regex; only kill targets whose name matches (testing)")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    a = parse_args(argv)
+    guard = Guard(
+        meminfo=a.meminfo, pressure=a.pressure, proc=a.proc, docker=Docker(a.docker),
+        min_available=int(a.min_available * GIB), panic_available=int(a.panic_available * GIB),
+        max_psi=a.max_psi, backoff=a.backoff, dry_run=a.dry_run, state_dir=a.state_dir,
+        name_filter=a.only_names,
+    )
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        guard.run(interval=a.interval, once=a.once)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
