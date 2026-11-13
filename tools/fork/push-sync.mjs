@@ -7,7 +7,12 @@
 //   3. refuse if a mirror holds a branch tip origin does not — work pushed only
 //      to the mirror would be overwritten
 //   4. push the base mirror, every patch branch and the integration branch to
-//      origin, then to each mirror, all with --force-with-lease --force-if-includes
+//      origin, then to each mirror, all with --force-with-lease --force-if-includes.
+//      One exception: when a remote's integration tip is the one apply-patches
+//      audited (`replaces` in fork-base.json), the integration branch is pushed
+//      with a lease pinned to that exact commit instead. The audit already showed
+//      nothing on it is lost, and the tip was usually pushed from another clone,
+//      so it is in no local reflog and --force-if-includes would refuse it.
 //
 // Usage:
 //   tools/fork/push-sync.sh [options]           (thin launcher for this file)
@@ -53,7 +58,8 @@ for (const arg of process.argv.slice(2)) {
   if (arg === "--dry-run") opts.dryRun = true;
   else if (arg === "-h" || arg === "--help") {
     const self = readFileSync(new URL(import.meta.url), "utf8");
-    for (const line of self.split("\n").slice(1, 21)) console.log(line.replace(/^\/\/ ?/, ""));
+    const header = self.split("\n").slice(1);
+    for (const line of header.slice(0, header.findIndex((l) => !l.startsWith("//")))) console.log(line.replace(/^\/\/ ?/, ""));
     process.exit(0);
   } else die(`Unknown option: ${arg}`);
 }
@@ -117,12 +123,25 @@ for (const m of mirrors) {
 // 4. push
 // ---------------------------------------------------------------------------
 
-for (const remote of ["origin", ...mirrors]) {
-  step(`Pushing ${branches.length} branches to ${remote}${opts.dryRun ? " (dry run)" : ""}`);
-  const args = ["push", "--force-with-lease", "--force-if-includes", "--porcelain"];
+const audited = typeof base.replaces === "string" && /^[0-9a-f]{40}$/.test(base.replaces) ? base.replaces : "";
+
+function push(remote, leaseArgs, refs) {
+  const args = ["push", ...leaseArgs, "--porcelain"];
   if (opts.dryRun) args.push("--dry-run");
-  const res = git(...args, remote, ...branches.map((b) => `refs/heads/${b}:refs/heads/${b}`));
+  const res = git(...args, remote, ...refs.map((b) => `refs/heads/${b}:refs/heads/${b}`));
   for (const line of res.out.split("\n")) if (/^[-+*=! ]\t/.test(line)) console.log(`  ${line.replace(/\t/g, "  ")}`);
   if (res.status !== 0) die(`push to ${remote} failed:\n${res.err}`);
+}
+
+for (const remote of ["origin", ...mirrors]) {
+  step(`Pushing ${branches.length} branches to ${remote}${opts.dryRun ? " (dry run)" : ""}`);
+  const tip = rev(`refs/remotes/${remote}/${opts.into}`);
+  const pinned = audited && tip === audited && tip !== rev(opts.into);
+  push(remote, ["--force-with-lease", "--force-if-includes"], pinned ? branches.filter((b) => b !== opts.into) : branches);
+  if (pinned) {
+    // Only this exact, audited tip may be replaced; anything pushed since fails the lease.
+    push(remote, [`--force-with-lease=refs/heads/${opts.into}:${audited}`], [opts.into]);
+    ok(`${opts.into} replaced the audited tip ${audited.slice(0, 9)}`);
+  }
   ok(`${remote} updated`);
 }
