@@ -150,6 +150,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Validation:** `pnpm check`; the new `illustrator-listed-cast-references` lane (fails without the route change); the other illustrator lanes.
 - **Touches:** `packages/server/src/services/image/illustrator-references.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/retry-agents-route.ts`, `scripts/regressions/illustrator-listed-cast-references.regression.ts`.
 
+### `patch/background-impersonate`
+
+- **What:** A closed generation stream no longer aborts an impersonate run. Like normal and guided runs, it keeps going and saves its user row, which the client's passive-disconnect recovery adopts (`expectedPersistedRole`). Only `POST /generate/abort` (Stop) cancels. The passive-disconnect helper `shouldAbortOnPassiveGenerationDisconnect` is gone. On the client, that recovery now reports an unsaved turn (`false`) when the server settled without saving the run's reply, in every chat mode (it was game-only). Typed and quick-button slash commands (`/impersonate`, `/guided`) hand the text back on `false` as well as on a throw. The stored draft keeps the sent text until the command succeeds, so a reload or a killed app cannot lose it.
+- **Why forked:** When the Android app went to the background, its socket dropped and the server aborted the impersonate run, so nothing was saved. The client then counted the run as a success and threw away the typed direction. The impersonate exclusion dates from #871 (May 2026), before the client could recover a user-role reply.
+- **Upstream status:** Not yet submitted (candidate). Upstream bug, reproduced on clean `staging`.
+- **Validation:** `pnpm check`; the new `impersonate-disconnect` lane (a real socket drop mid-stream for normal, guided and impersonate runs, plus a Stop that still cancels) and `slash-draft-restore` lane; `generate-interrupted-retry`, `mari-background-stream`, `generation-output`, `chat-input-main`, `send-follows-main`, `roleplay-streaming`, `roleplay-interrupt-generation`, `open-issues`.
+- **Touches:** `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/generate-route-utils.ts`, `packages/client/src/hooks/use-generate.ts`, `packages/client/src/components/chat/ChatInput.tsx`, `scripts/regressions/impersonate-disconnect.regression.ts`, `scripts/regressions/slash-draft-restore.regression.ts`.
+
 ## Retired patches
 
 ### `patch/impersonate-regen-group` — retired on the 2026-11-08 sync
