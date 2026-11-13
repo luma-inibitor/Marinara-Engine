@@ -1,0 +1,14 @@
+[Unit]
+Description=marinara-sync: rebase the Marinara fork onto upstream staging, validate, push
+Documentation=file://%h/.local/bin/marinara-sync
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/marinara-sync
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Nice=10
+IOSchedulingClass=idle
+# The script itself is git and a small node process; the heavy work runs in capped containers.
+MemoryMax=2G
+TimeoutStartSec=3h
