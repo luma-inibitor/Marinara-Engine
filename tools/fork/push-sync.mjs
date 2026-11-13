@@ -107,7 +107,10 @@ ok("fetched");
 for (const m of mirrors) {
   const ahead = branches.filter((b) => {
     const theirs = rev(`refs/remotes/${m}/${b}`);
-    return theirs && theirs !== rev(`refs/remotes/origin/${b}`) && theirs !== rev(b);
+    if (!theirs || theirs === rev(`refs/remotes/origin/${b}`) || theirs === rev(b)) return false;
+    // A mirror that is only behind origin (or the local branch) loses nothing.
+    const contains = (ref) => rev(ref) && git("merge-base", "--is-ancestor", theirs, ref).status === 0;
+    return !contains(`refs/remotes/origin/${b}`) && !contains(b);
   });
   if (ahead.length) {
     die(
