@@ -1,0 +1,18 @@
+[Unit]
+Description=marinara-guard: kill heavy Docker/Chromium work before memory pressure freezes beebox
+Documentation=file://%h/.local/bin/marinara-guard
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u %h/.local/bin/marinara-guard
+Environment=PYTHONDONTWRITEBYTECODE=1
+# thresholds (MARINARA_GUARD_*) live in the host config; see tools/beebox/beebox.env.example
+EnvironmentFile=-%h/.config/marinara/beebox.env
+Restart=always
+RestartSec=2
+# keep the guard's own pages resident under pressure (ignored if the memory controller is not delegated)
+MemoryLow=64M
+
+[Install]
+WantedBy=default.target
