@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# marinara-rebuild: rebuild a Marinara fork's integration branch from its patch queue.
+# Runs the fork's tools/fork/apply-patches.mjs from a copy outside the tree (it checks out
+# other branches, so tools/fork/ vanishes mid-run), with the queue from origin/patch/fork-tooling.
+#
+#   marinara-rebuild [--repo DIR] [apply-patches args...]     e.g. marinara-rebuild --base origin/staging
+#
+# Default repo: MARINARA_DEV_REPO from ~/.config/marinara/beebox.env, else ~/code/luma/Marinara-Engine.
+# Pushing stays a separate step: tools/fork/push-sync.sh.
+set -euo pipefail
+conf=${MARINARA_BEEBOX_ENV:-$HOME/.config/marinara/beebox.env}
+if [ -r "$conf" ]; then . "$conf"; fi
+repo=${MARINARA_DEV_REPO:-$HOME/code/luma/Marinara-Engine}
+if [ "${1:-}" = "--repo" ]; then repo=${2:?--repo needs a directory}; shift 2; fi
+cd "$repo"
+tools=$(mktemp -d "${TMPDIR:-/tmp}/marinara-rebuild.XXXX")
+trap 'rm -rf "$tools"' EXIT
+git show origin/patch/fork-tooling:tools/fork/apply-patches.mjs >"$tools/apply-patches.mjs"
+git show origin/patch/fork-tooling:tools/fork/patches.list >"$tools/patches.list"
+FORK_PATCH_LIST="$tools/patches.list" nice -n 10 node "$tools/apply-patches.mjs" "$@"
