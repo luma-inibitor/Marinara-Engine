@@ -34,6 +34,8 @@ PROMPT="$HOME/.config/marinara-sync/claude-prompt.md"
 CLAUDE=${MARINARA_CLAUDE:-$HOME/.local/bin/claude}
 # pnpm check peaks at about 3.1 GiB; keep the guard's 2 GiB reserve
 MIN_AVAILABLE_KIB=$((${MARINARA_SYNC_MIN_AVAILABLE_GIB:-6} * 1024 * 1024))
+# the image build runs in the buildx builder `capped` (5 GiB), so it needs less than pnpm check
+DEPLOY_MIN_AVAILABLE_KIB=$((${MARINARA_SYNC_DEPLOY_MIN_AVAILABLE_MIB:-5120} * 1024))
 MEMORY_WAIT_MINUTES=${MARINARA_SYNC_MEMORY_WAIT_MINUTES:-30}
 KEEP_LOGS=${MARINARA_SYNC_KEEP_LOGS:-14}
 MARINARA="$HOME/.local/bin/marinara"
@@ -67,11 +69,20 @@ record() { # record <result> <detail>
 
 available_kib() { awk '/^MemAvailable:/ {print $2}' /proc/meminfo; }
 
-wait_for_memory() {
-  local waited=0
-  while [ "$(available_kib)" -lt "$MIN_AVAILABLE_KIB" ]; do
+memory_holders() { # the six biggest processes and every container, by resident memory
+  { ps -eo rss=,args= --sort=-rss | head -n 6 | awk '{
+    mib = int($1 / 1024); cmd = $2; sub(/.*\//, "", cmd); $1 = $2 = ""; rest = substr($0, 3)
+    printf "%s%d MiB %s", (NR > 1 ? "; " : ""), mib, substr(cmd " " rest, 1, 70)
+  }'; } 2>/dev/null || true
+  printf ' | containers: %s' "$(docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' 2>/dev/null | cut -d/ -f1 | paste -sd, -)"
+}
+
+wait_for_memory() { # wait_for_memory [min KiB]
+  local need=${1:-$MIN_AVAILABLE_KIB} waited=0
+  while [ "$(available_kib)" -lt "$need" ]; do
     [ "$waited" -ge "$MEMORY_WAIT_MINUTES" ] && return 1
-    say "waiting for memory: $(($(available_kib) / 1024)) MiB available, need $((MIN_AVAILABLE_KIB / 1024))"
+    say "waiting for memory: $(($(available_kib) / 1024)) MiB available, need $((need / 1024))"
+    [ $((waited % 10)) -eq 0 ] && say "memory holders: $(memory_holders)"
     sleep 60
     waited=$((waited + 1))
   done
@@ -140,8 +151,8 @@ deploy() { # deploy GitHub's luma/staging if beebox runs something older; return
     say "dry run: would deploy ${target:0:9} over ${cur_sha:-nothing}"
     return 0
   fi
-  if ! wait_for_memory; then
-    hand_to_claude "deploy: memory stayed low; the image was not built"
+  if ! wait_for_memory "$DEPLOY_MIN_AVAILABLE_KIB"; then
+    hand_to_claude "deploy: memory stayed below $((DEPLOY_MIN_AVAILABLE_KIB / 1024)) MiB; the image was not built"
     return 1
   fi
   say "deploy: building ${target:0:9}"
