@@ -16,8 +16,8 @@ const storeDir = join(dataDir, "storage");
 process.env.DATA_DIR = dataDir;
 process.env.FILE_STORAGE_DIR = storeDir;
 
-const { createFileNativeDB, encodeShardKey } = await import("../../packages/server/src/db/file-backed-store.js");
-const { createChatsStorage } = await import("../../packages/server/src/services/storage/chats.storage.js");
+const { createFileNativeDB, encodeShardKey } = await import("../../../packages/server/src/db/file-backed-store.js");
+const { createChatsStorage } = await import("../../../packages/server/src/services/storage/chats.storage.js");
 
 const writeShard = (table: string, key: string, rows: unknown[]) => {
   mkdirSync(join(storeDir, "tables", table), { recursive: true });
