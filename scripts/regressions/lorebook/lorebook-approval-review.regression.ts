@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import {
   buildLorebookWriteApprovalProposal,
   parseLorebookWriteApprovalText,
-} from "../../packages/server/src/routes/generate/agent-write-approval.js";
+} from "../../../packages/server/src/routes/generate/agent-write-approval.js";
 import {
   classifyApprovalEntry,
   composeEntryContent,
@@ -17,7 +17,7 @@ import {
   parseLorebookApprovalText,
   resolveApprovalTarget,
   type ExistingLorebookEntry,
-} from "../../packages/client/src/lib/lorebook-approval-review.js";
+} from "../../../packages/client/src/lib/lorebook-approval-review.js";
 
 const protocolBefore = [
   "Custody protocols for Crow:",
