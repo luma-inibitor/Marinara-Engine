@@ -568,6 +568,20 @@ export function withoutSessionAdvancedMemory(metadata: Record<string, unknown>):
   return { ...rest, summaryEntries, summary: compileChatSummaryEntries(summaryEntries) };
 }
 
+const revisionEntries = new WeakMap<Metadata, ReturnType<typeof normalizeChatSummaryEntries>>();
+/** Chat Summary entries as dependency revisions hash them, normalized once per read of the chat. */
+function summaryRevisionEntries(ctx: Context) {
+  let entries = revisionEntries.get(ctx.metadata);
+  if (!entries) {
+    entries = normalizeChatSummaryEntries(ctx.metadata.summaryEntries, {
+      legacySummary: typeof ctx.metadata.summary === "string" ? ctx.metadata.summary : null,
+      now: "1970-01-01T00:00:00.000Z", // Missing timestamps must not change source revisions between reads.
+    });
+    revisionEntries.set(ctx.metadata, entries);
+  }
+  return entries;
+}
+
 function policyFingerprint(ctx: Context): string {
   return hash([
     ctx.individual,
@@ -2909,11 +2923,7 @@ export function createAdvancedMemoryService(db: DB, { includeExcerptsInStatus = 
 
   function sourceEntries(ctx: Context, eligible: readonly AdvancedMemoryMessage[], historical: boolean) {
     const ids = new Set(eligible.map((message) => message.id));
-    const entries = normalizeChatSummaryEntries(ctx.metadata.summaryEntries, {
-      legacySummary: typeof ctx.metadata.summary === "string" ? ctx.metadata.summary : null,
-      now: "1970-01-01T00:00:00.000Z", // Missing timestamps must not change source revisions between reads.
-    });
-    return entries.filter((entry) => {
+    return summaryRevisionEntries(ctx).filter((entry) => {
       if (!entry.enabled) return false;
       if (!entry.messageIds?.length && entry.rangeEndIndex && entry.rangeEndIndex > ctx.messages.length) return false;
       const coverage = entry.messageIds?.length
