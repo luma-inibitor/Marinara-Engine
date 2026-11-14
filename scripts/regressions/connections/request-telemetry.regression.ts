@@ -4,14 +4,14 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { OpenAIProvider } from "../../packages/server/src/services/llm/providers/openai.provider.js";
-import type { BaseLLMProvider, ChatMessage } from "../../packages/server/src/services/llm/base-provider.js";
+import { OpenAIProvider } from "../../../packages/server/src/services/llm/providers/openai.provider.js";
+import type { BaseLLMProvider, ChatMessage } from "../../../packages/server/src/services/llm/base-provider.js";
 import {
   hashPromptSections,
   readRequestLog,
   RequestTelemetryRecorder,
   withRequestTelemetry,
-} from "../../packages/server/src/services/telemetry/request-telemetry.js";
+} from "../../../packages/server/src/services/telemetry/request-telemetry.js";
 
 const dataDir = mkdtempSync(join(tmpdir(), "marinara-request-telemetry-"));
 const previousDataDir = process.env.DATA_DIR;
