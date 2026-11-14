@@ -45,10 +45,10 @@ const provider = createServer(async (request, response) => {
   );
 });
 
-const { createFileNativeDB } = await import("../../packages/server/src/db/file-backed-store.js");
-const { createChatsStorage } = await import("../../packages/server/src/services/storage/chats.storage.js");
-const { createConnectionsStorage } = await import("../../packages/server/src/services/storage/connections.storage.js");
-const { createAdvancedMemoryService } = await import("../../packages/server/src/services/advanced-memory.js");
+const { createFileNativeDB } = await import("../../../packages/server/src/db/file-backed-store.js");
+const { createChatsStorage } = await import("../../../packages/server/src/services/storage/chats.storage.js");
+const { createConnectionsStorage } = await import("../../../packages/server/src/services/storage/connections.storage.js");
+const { createAdvancedMemoryService } = await import("../../../packages/server/src/services/advanced-memory.js");
 const db = await createFileNativeDB();
 const chats = createChatsStorage(db);
 const connections = createConnectionsStorage(db);
