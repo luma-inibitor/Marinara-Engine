@@ -9,7 +9,7 @@ import {
   resolveWeatherRenderConfig,
   sampleSkyPalette,
   sunElevation,
-} from "../../packages/client/src/lib/weather-renderer.js";
+} from "../../../packages/client/src/lib/weather-renderer.js";
 
 // The ambient sky layer is an overlay above a user-chosen chat background.
 // These checks pin the pure decisions that keep it honest: weather moods stay
