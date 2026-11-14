@@ -1,0 +1,24 @@
+{
+  "baseRef": "upstream/staging",
+  "baseCommit": "e86efa27cccae7ed00f4bd208ef001dbee033f7a",
+  "baseBranch": "staging",
+  "patches": {
+    "patch/fork-upstream-diagnostics": "6e6f568610703e45e7caef480c4a3ff0324a0166",
+    "patch/ambient-sky": "bc0e80548db16169f48e5ece3b43dcca39ed8e5f",
+    "patch/game-widget-tags-persist": "25bb301fcc5c3a1571a1d743e201faef031eb9cd",
+    "patch/game-weather-during-generation": "71338a3c55323889bcea15a6851800af18fe52fc",
+    "patch/rp-weather-while-typing": "4b4e5e4b62e0fe6d486d74a58180258a1c4072d2",
+    "patch/openrouter-session-id": "f9066249cbce08874eb06d1594302c8e5b451c87",
+    "patch/request-telemetry": "cd992b59d2777b810e2a4b463231413a3506b7a5",
+    "patch/openrouter-gemini-cache-breakpoint": "c994d0a7aec00788e3aae8f529a511a84dc30144",
+    "patch/impersonate-lore-trigger": "2c1c3aa51528630963b016f111cdba5d073310cd",
+    "patch/keeper-review-ui": "f32e994bf5ef54a16a95d40b975d36d5b6f4e218",
+    "patch/android-remote-server": "dd8760ec7858ad71a33d745bc2f9952a2b878101",
+    "patch/advanced-memory-yield-and-cache": "11a3711a6b1100df871e00a95d225e744932fefa",
+    "patch/swipe-edit-target": "ffb31786cd1c4ea3b4f733899e66d2927f295f05",
+    "patch/generation-record-pruning": "80cd22dd171a7c20f94db19778871a3249a7ed1e",
+    "patch/illustrator-visible-references": "ccdd60e8b6dac66fc4d7901888aa5be5c5490603",
+    "patch/fork-tooling": "62870f7ac4ce3d8e14c9a7270ea4d92ef47ebf6c"
+  },
+  "replaces": "92849112c4d9bf6e692eb8d2e4374c74f8eee1f3"
+}
