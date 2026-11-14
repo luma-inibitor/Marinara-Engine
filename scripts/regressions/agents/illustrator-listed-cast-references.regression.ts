@@ -1,9 +1,10 @@
+// regression-layout: source-path the last check reads the generate routes to catch a fork rebase that drops their call to the matcher.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   illustratorReferenceMatchText,
   resolveIllustratorCharacterReferences,
-} from "../../packages/server/src/services/image/illustrator-references.js";
+} from "../../../packages/server/src/services/image/illustrator-references.js";
 
 const cards = [
   { id: "doctor", name: "Dr. Veill" },
@@ -37,7 +38,7 @@ assert.equal(illustratorReferenceMatchText(["  ", 3], prompt, ["user", "reply"])
 assert.equal(illustratorReferenceMatchText(["Julian"], prompt, ["user", "reply"]), prompt);
 
 for (const route of ["generate.routes.ts", "generate/retry-agents-route.ts"]) {
-  const source = readFileSync(new URL(`../../packages/server/src/routes/${route}`, import.meta.url), "utf8");
+  const source = readFileSync(new URL(`../../../packages/server/src/routes/${route}`, import.meta.url), "utf8");
   assert.match(source, /promptText: illustratorReferenceMatchText\(illCharacters, imagePrompt,/, route);
 }
 console.log("illustrator-listed-cast-references: ok");
