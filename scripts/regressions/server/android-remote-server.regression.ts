@@ -5,11 +5,11 @@ import { readFileSync } from "node:fs";
 // can't run in CI, so this checks the source: remote mode must stay HTTPS-only, must skip the
 // local-secret handshake, and must not widen what the WebView or native bridge trusts.
 const source = readFileSync(
-  new URL("../../android/app/src/main/java/com/marinara/engine/MainActivity.java", import.meta.url),
+  new URL("../../../android/app/src/main/java/com/marinara/engine/MainActivity.java", import.meta.url),
   "utf8",
 );
 const networkConfig = readFileSync(
-  new URL("../../android/app/src/main/res/xml/network_security_config.xml", import.meta.url),
+  new URL("../../../android/app/src/main/res/xml/network_security_config.xml", import.meta.url),
   "utf8",
 );
 
