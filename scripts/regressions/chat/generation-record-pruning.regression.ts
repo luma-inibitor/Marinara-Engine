@@ -1,3 +1,4 @@
+// regression-layout: source-path the last check reads the generate route to catch a fork rebase that drops its call to the sweep.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
@@ -6,7 +7,7 @@ import {
   messagesPastRecordWindow,
   pruneStaleGenerationRecords,
   type GenerationRecordStorage,
-} from "../../packages/server/src/routes/generate/prune-generation-records.js";
+} from "../../../packages/server/src/routes/generate/prune-generation-records.js";
 
 // A long roleplay chat kept the full prompt and the memory snapshot on every impersonated (user-role) turn, because
 // the pruning only looked at assistant messages: 816 such turns made a 716 MB chat out of 7 MB of story.
@@ -85,7 +86,7 @@ assert.equal(await pruneStaleGenerationRecords(storage, "chat"), 0);
 assert.deepEqual(writes, []);
 
 // --- the generate route calls it after every saved message, not the old assistant-only loop ---
-const route = readFileSync(new URL("../../packages/server/src/routes/generate.routes.ts", import.meta.url), "utf8");
+const route = readFileSync(new URL("../../../packages/server/src/routes/generate.routes.ts", import.meta.url), "utf8");
 assert.match(route, /await pruneStaleGenerationRecords\(chats, input\.chatId\);/);
 assert.doesNotMatch(route, /filter\(\(m\) => m\.role === "assistant"\)\.slice\(0, -2\)/);
 
