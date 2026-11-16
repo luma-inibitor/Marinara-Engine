@@ -149,7 +149,7 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Why forked:** Selection matched names anywhere in the reply, so characters mentioned off-screen were attached as likeness references. On the Veill roleplay a two-person dinner scene carried four faces plus the location, and Krea 2 stitches every reference into one strip with no way to tell whose face is whose, so it blended them. Replaying six recent scenes (same seed, appearance blocks off): likeness 8.2 → 8.9, hybrids 1/6 → 0/6, with the location reference kept.
 - **Upstream status:** Not yet submitted (candidate). Upstream bug, self-contained.
 - **Validation:** `pnpm check`; the new `illustrator-listed-cast-references` lane (fails without the route change); the other illustrator lanes.
-- **Touches:** `packages/server/src/services/image/illustrator-references.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/retry-agents-route.ts`, `scripts/regressions/agents/illustrator-listed-cast-references.regression.ts`.
+- **Touches:** `packages/server/src/services/image/illustrator-references.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/retry-agents-route.ts`, `scripts/regressions/agents/illustrator-listed-cast-references.regression.ts`. It also edits upstream's roleplay illustration check in `scripts/regressions/open-issues.regression.ts`, which matched the bare `promptText` array the patch now wraps in `illustratorReferenceMatchText()` (2026-11-16).
 
 ## Retired patches
 
