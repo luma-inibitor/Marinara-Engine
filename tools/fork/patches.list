@@ -10,9 +10,7 @@ patch/ambient-sky
 patch/game-widget-tags-persist
 patch/game-weather-during-generation
 patch/rp-weather-while-typing
-patch/openrouter-session-id
 patch/request-telemetry
-patch/openrouter-gemini-cache-breakpoint
 patch/impersonate-lore-trigger
 patch/keeper-review-ui
 patch/android-remote-server
