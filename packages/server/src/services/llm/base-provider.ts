@@ -720,6 +720,25 @@ export function fitMessagesToContext(
  * Sanitise raw error response text for display.
  * Strips HTML (Cloudflare/proxy error pages), extracts the title, and truncates.
  */
+/**
+ * A gateway such as OpenRouter answers a provider refusal with a generic message ("Provider returned error") and puts
+ * the provider's own error in `error.metadata.raw`, with the provider in `provider_name`.
+ */
+function upstreamProviderMessage(metadata: unknown): string {
+  if (!metadata || typeof metadata !== "object") return "";
+  const { raw, provider_name: provider } = metadata as { raw?: unknown; provider_name?: unknown };
+  if (typeof raw !== "string" || !raw.trim()) return "";
+  let message = raw.trim();
+  try {
+    const parsed = JSON.parse(message);
+    const inner = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+    if (typeof inner === "string" && inner.trim()) message = inner.trim();
+  } catch {
+    // raw was plain text
+  }
+  return typeof provider === "string" && provider.trim() ? `${provider.trim()}: ${message}` : message;
+}
+
 export function sanitizeApiError(raw: string, maxLen = 300): string {
   // If it looks like HTML, pull out the <title> or strip all tags
   if (raw.includes("<html") || raw.includes("<!DOCTYPE")) {
@@ -736,7 +755,10 @@ export function sanitizeApiError(raw: string, maxLen = 300): string {
   try {
     const json = JSON.parse(raw);
     const msg = json?.error?.message ?? json?.error ?? json?.message;
-    if (typeof msg === "string") return msg.slice(0, maxLen);
+    if (typeof msg === "string") {
+      const upstream = upstreamProviderMessage(json?.error?.metadata);
+      return (upstream ? `${msg} (${upstream})` : msg).slice(0, maxLen);
+    }
   } catch {
     // not JSON — return as-is
   }
