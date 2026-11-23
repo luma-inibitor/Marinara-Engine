@@ -153,6 +153,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Touches:** `packages/server/src/services/image/illustrator-references.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/retry-agents-route.ts`, `scripts/regressions/agents/illustrator-listed-cast-references.regression.ts`.
 - **Staging rebase note (2026-11-17, 623523cb2):** the patch's commit that edited upstream's roleplay illustration regex in `open-issues.regression.ts` was dropped: upstream #9439 replaced those text checks with route tests in `scripts/regressions/image/illustrator-reply-images.regression.ts`.
 
+### `patch/provider-error-raw`
+
+- **What:** `sanitizeApiError()` keeps the provider's own error when a gateway wraps it. OpenRouter answers a provider refusal with `error.message` "Provider returned error" and puts the provider's body in `error.metadata.raw`, with the provider in `provider_name`; the sanitized error now reads "Provider returned error (Google: <the provider's message>)".
+- **Why forked:** Long-Term Memory extraction through OpenRouter failed with a bare "Provider returned error" in the shown error and in the debug refusal log, so the cause could only be found by replaying the request outside Marinara (2026-11-22: the replay's raw error was Anthropic refusing a schema with 25 optional parameters, limit 24).
+- **Upstream status:** Not yet submitted (candidate). Upstream bug, self-contained.
+- **Validation:** `pnpm check`; the new `connections/gateway-provider-error` lane; `connections/provider-requests`, `connections/openai-sse-stream`, `anthropic-safe-retry`.
+- **Touches:** `packages/server/src/services/llm/base-provider.ts`, `scripts/regressions/connections/gateway-provider-error.regression.ts`.
+
 ## Retired patches
 
 ### `patch/background-impersonate` — retired on the 2026-11-14 sync
