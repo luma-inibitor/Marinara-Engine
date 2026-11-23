@@ -65,16 +65,6 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Staging rebase note (2.5.0):** upstream moved the author-notes callbacks that sat after `weatherEffectsPaused`, so the hunk conflicted. Resolution: take upstream's lines without the `weatherEffectsPaused` line.
 - **Touches:** `packages/client/src/components/chat/ChatRoleplaySurface.tsx`, `scripts/regressions/roleplay-streaming.regression.ts`.
 
-### `patch/openrouter-session-id`
-
-- **What:** Sends the chat id as OpenRouter's `session_id` on chat-completions requests. OpenRouter serves a model from many providers, each with its own prompt cache. Without a session id it only sticks a conversation to one provider after it sees a cache hit, so rerolls and new turns land on different providers and miss until one happens to hit. With the session id, a chat's requests go back to the same provider from the first one. Adds `ChatOptions.sessionId`, set to the chat id on the three main generation calls in `generate.routes.ts`, and applied by `OpenAIProvider` only when the endpoint is OpenRouter.
-- **Why forked:** GLM 5.2 rerolls in a live roleplay chat sent an identical 50,710-token prompt and got 0, 0 and 1,600 cached tokens before OpenRouter stuck to a provider, then 50,624 on every later reroll.
-- **Upstream status:** Not yet submitted (candidate). Self-contained and provider-gated.
-- **Validation:** `pnpm check`, `node ./scripts/run-regressions.mjs --filter scripts/regressions/provider-caching.regression.ts` (new case: session id sent on the chat and tool paths for OpenRouter only).
-- **Staging rebase note (2.5.1, 77ee9026e):** upstream moved the tool-call loop into `runToolRounds()`, which builds every request from one `requestOptions()` callback, so the old tool-path hunks conflicted. Resolution: take upstream's file and set `sessionId: input.chatId` in two places, `textChatOptions` and the `requestOptions()` passed to `runToolRounds()`. Those two cover every main generation request.
-- **Staging rebase note (2026-10-25, 601fc97ff):** upstream's `requestOptions()` for `runToolRounds()` became a block that also resets `replyThinking` per request. Resolution: take upstream's block and add `sessionId: input.chatId` after `openrouterProvider`, as before.
-- **Touches:** `packages/shared/src/types/generation-integration.ts`, `packages/server/src/services/llm/providers/openai.provider.ts`, `packages/server/src/routes/generate.routes.ts`, `scripts/regressions/provider-caching.regression.ts`.
-
 ### `patch/request-telemetry`
 
 - **What:** Records telemetry for every LLM request the main generation path makes. `OpenAIProvider` copies the response's `provider`, `id` and `usage.cost`, and the `session_id` it sent, into `LLMUsage`. A wrapper around the main generation provider times each request and hashes its prompt, and the saved message's `extra.generationInfo` gains `upstreamProvider`, `generationId`, `ttftMs`, `sessionId`, `costUsd`, `presetHash` and `promptSections`, each omitted when unknown. They come from the generation's last successful request, except `costUsd`, which is the sum over its requests. Each request is also appended as one JSON line to `<DATA_DIR>/telemetry/requests-YYYYMMDD.jsonl` (UTC day), including failed and aborted ones, with `messageId` and `swipeIndex` filled in once the reply is saved. Rows have `ts`, `chatId`, `messageId`, `swipeIndex`, `kind` (`reply`, `reroll`, `impersonate`, `continue`), `model`, `connectionProvider`, `presetId`, the generationInfo fields above, `promptTokens`, `cachedTokens`, `cacheWriteTokens`, `durationMs`, `finishReason` and `error`; unknown values are `null`. Agent calls are logged from `emitAgentDebug` as `kind: "agent"` rows with `agentType`, `model`, `promptTokens`, `durationMs`, `finishReason` and `error`. Advanced Memory preparation logs a `kind: "memory_recall"` row with `ok`, `durationMs`, `error` and `resultCount` (recalled scenes plus recalled messages); a failed query embedding now adds `query-embedding-timeout` or `query-embedding-failed` to the recall receipt's reasons, which is where `ok: false` comes from when preparation itself succeeds. `GET /api/telemetry/requests?chatId=&since=&limit=` returns `{ rows }`, oldest first, newest last, `limit` defaulting to 500 and capped at 5000.
@@ -84,6 +74,7 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Validation:** `pnpm check`, `node ./scripts/run-regressions.mjs --filter scripts/regressions/connections/request-telemetry.regression.ts` (OpenRouter metadata on the chat and tool paths, streaming and not, through to the log and the generationInfo summary; a failed request logged with its error; prompt hashes stable and changing only at the edited message). Also the `provider-caching`, `advanced-memory`, `agent-` and `generat` lanes.
 - **Staging rebase note (2.5.1, 77ee9026e):** two conflicts in `generate.routes.ts`. Upstream wraps the runtime provider in `fixedTextProvider()` for a defined Game Master intro. Resolution: wrap the runtime provider with `withRequestTelemetry()` first and pass that to `fixedTextProvider()`, so a fixed intro logs no request. Upstream also moved the saved message's extra into `buildGenerationInfoExtra()` (`routes/generate/saved-message-extra.ts`). Resolution: call `requestRecorder.commit()` before it and merge the summary into the returned `generationInfo`, leaving that helper unchanged.
 - **Staging rebase note (2026-10-25, 601fc97ff):** only the imports conflicted: upstream stopped importing `mergeModelContextLimit` and `resolveStoredModelContextLimit` from `model-access-policy.js`. Resolution: upstream's import plus the patch's `request-telemetry.js` import.
+- **Staging rebase note (2026-11-23, 441c8004e):** only the imports conflicted again: upstream added `withHistoryLeftOutEarlier` to the `model-access-policy.js` import (`acf082bc02`). Resolution: upstream's import plus the patch's `request-telemetry.js` import. The `sessionId` field now records upstream's hashed chat key (`8a2b151486`), since `patch/openrouter-session-id` is retired.
 - **Touches:** `packages/shared/src/types/generation-integration.ts`, `packages/server/src/services/llm/providers/openai.provider.ts`, `packages/server/src/services/telemetry/request-telemetry.ts`, `packages/server/src/routes/telemetry.routes.ts`, `packages/server/src/routes/index.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/services/agents/agent-executor.ts`, `packages/server/src/services/advanced-memory.ts`, `scripts/regressions/connections/request-telemetry.regression.ts`.
 
 ### `patch/impersonate-lore-trigger`
@@ -93,15 +84,6 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Upstream status:** Not submitted (candidate). Upstream bug, self-contained.
 - **Validation:** `pnpm check`; `node ./scripts/run-regressions.mjs --filter scripts/regressions/lorebook/matching-and-injection.regression.ts` (new case: trigger sets for impersonate, user-role and assistant-role rerolls, and a plain turn, plus source checks that both routes pass the role).
 - **Touches:** `packages/server/src/services/generation/lorebook-generation-runtime.ts`, `packages/server/src/routes/generate.routes.ts`, `packages/server/src/routes/generate/dry-run-route.ts`, `scripts/regressions/lorebook/matching-and-injection.regression.ts`.
-
-### `patch/openrouter-gemini-cache-breakpoint`
-
-- **What:** With prompt caching on, an OpenRouter request for a Gemini model carries a `cache_control` breakpoint on the text of the message at the connection's caching depth (`cachingAtDepth`, default 5; tool messages and tool-call turns are skipped), instead of the top-level `cache_control` other models get.
-- **Why forked:** OpenRouter ignores the top-level marker for Gemini; explicit Gemini caching needs a breakpoint inside message content. Measured against OpenRouter with a 9.8k-token prompt on Gemini 3.8 Flash (Vertex): the top-level marker gave no cache write and 4,080 implicit cached tokens on repeats; a message breakpoint wrote 9,783 tokens on the first request and read all 9,783 on each repeat, at about a fifth of the cost. On the live instance every Gemini request after the caching switch was turned on reported zero cache writes.
-- **Upstream status:** Not yet submitted (candidate). Self-contained, gated on OpenRouter, Gemini and the caching switch.
-- **Validation:** `pnpm check`; `provider-caching` regression (new case: breakpoint position by depth on both request paths, no top-level marker for Gemini, other models unchanged); a live run of `OpenAIProvider.chatComplete` against OpenRouter (write 9,763 then 9,763 cached twice).
-- **Staging rebase note (2.5.1, 77ee9026e):** upstream's `provider-compat` lane asserts the top-level `cache_control` on OpenRouter Gemini requests, which this patch removes, so that lane failed on the fork (it already did on the 2.5.0 base). A second commit changes those assertions to expect the message breakpoint and no top-level marker.
-- **Touches:** `packages/server/src/services/llm/providers/openai.provider.ts`, `scripts/regressions/provider-caching.regression.ts`, `scripts/regressions/provider-compat.regression.ts`.
 
 ### `patch/keeper-review-ui`
 
@@ -162,6 +144,14 @@ Quick reference: the live delta vs. stock is `git diff staging...luma/staging`.
 - **Touches:** `packages/server/src/services/llm/base-provider.ts`, `scripts/regressions/connections/gateway-provider-error.regression.ts`.
 
 ## Retired patches
+
+### `patch/openrouter-gemini-cache-breakpoint` — retired on the 2026-11-23 sync
+
+Upstream fixed the same problem. `8a2b151486 fix(llm): place OpenRouter cache breakpoints per model family and send a chat session id` sends no top-level `cache_control` for Gemini on OpenRouter and puts exactly one block mark on the end of the system prompt, since OpenRouter uses only the last Gemini mark; it also updated the `provider-compat` assertions this patch's second commit changed. Upstream's mark is on the system prompt rather than at Cache depth, so a Gemini chat caches the system prompt but not older history. The first commit conflicted with upstream's new `applyOpenRouterPromptCaching()`; we took upstream's version. The last tip, `c7d4cd824d`, stays on origin as `patch/openrouter-gemini-cache-breakpoint`.
+
+### `patch/openrouter-session-id` — retired on the 2026-11-23 sync
+
+Upstream adopted it in the same commit, `8a2b151486`: `applyPromptCacheKey()` sends the hashed chat cache key as `session_id` on every OpenRouter request, on all three request paths. The patch still rebased cleanly, and would have overwritten upstream's key with the raw chat id. `patch/request-telemetry` reads `session_id` from the request body, so it records upstream's key. The last tip, `337f53a61e`, stays on origin as `patch/openrouter-session-id`.
 
 ### `patch/background-impersonate` — retired on the 2026-11-14 sync
 
