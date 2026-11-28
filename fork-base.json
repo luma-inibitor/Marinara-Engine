@@ -1,0 +1,23 @@
+{
+  "baseRef": "upstream/staging",
+  "baseCommit": "f9fdcdb48dd1fc11f9971e1ad7a27d9a891afa70",
+  "baseBranch": "staging",
+  "patches": {
+    "patch/fork-upstream-diagnostics": "210778bf4d154e325a38bdb1ed0d1282a2f74de2",
+    "patch/ambient-sky": "7071d09d549d38b43c952457ee65d24220a4ce7b",
+    "patch/game-widget-tags-persist": "436fbf3c7ed805f7e263e7dbf9c2977412517d02",
+    "patch/game-weather-during-generation": "bf18d46adf1a6c470c22556ab9cb481a1a69b2e2",
+    "patch/rp-weather-while-typing": "28dfbdf9c1aee1b54138f8786470f2ea9387d6df",
+    "patch/request-telemetry": "6a2dd8393aff104466e4de17d5bd0a17bb2970e6",
+    "patch/impersonate-lore-trigger": "734f45beeeba8a61256b23dafc2e50db97da9534",
+    "patch/keeper-review-ui": "e57a4d28db635b464cb54d60e4fc5eaed3fbd175",
+    "patch/android-remote-server": "1b12ba2230a49ad864289846de2704ca041d5abe",
+    "patch/advanced-memory-yield-and-cache": "60956a8dfe0283a0ef32cce6d445efbf263e29f4",
+    "patch/swipe-edit-target": "d02b8a91aad5b6d04c3f6c7b85e4d9dd019f30d3",
+    "patch/generation-record-pruning": "b7e24ad606222dfbb0ff2e3f558dd635faccb701",
+    "patch/illustrator-visible-references": "5f31c9ab6c608d2fd04bc867bae172369ef0baed",
+    "patch/provider-error-raw": "d9be1b259d963ac0c7549eab69a880ddec1b0a8a",
+    "patch/fork-tooling": "51348d522ccc20d09106417f210e4a95b2932918"
+  },
+  "replaces": "05e5fd8c90df6d2a0f645aaad80a88e5aaf5f346"
+}
